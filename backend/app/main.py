@@ -1,19 +1,43 @@
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .git import ingest_repository
+from .github import GitHubError, poll_github
 from .store import Store
 from .workflow import create_candidate
 
 store = Store(os.environ.get("FORGE_DB_PATH"))
-app = FastAPI(title="Forge", version="0.1.0")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    try:
+        yield
+    finally:
+        store.close()
+
+
+app = FastAPI(title="Forge", version="0.1.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_methods=["*"], allow_headers=["*"])
+
+
+@app.middleware("http")
+async def local_request_guard(request, call_next):
+    client_host = request.client.host if request.client else None
+    if client_host and client_host not in {"127.0.0.1", "::1", "testclient"}:
+        return JSONResponse({"detail": "Forge accepts loopback requests only."}, status_code=403)
+    origin = request.headers.get("origin")
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"} and origin and urlparse(origin).hostname not in {"127.0.0.1", "localhost", "::1"}:
+        return JSONResponse({"detail": "Forge rejected a non-local browser request."}, status_code=403)
+    return await call_next(request)
 
 
 class PendingDecision(BaseModel):
@@ -36,8 +60,11 @@ class GitImport(BaseModel):
 
 
 class GitHubCredentials(BaseModel):
-    token: str | None = Field(default=None, min_length=1)
-    webhook_secret: str | None = Field(default=None, min_length=1)
+    token: str = Field(min_length=1)
+
+
+class ReflectionReview(BaseModel):
+    status: str
 
 
 @app.get("/health")
@@ -60,9 +87,22 @@ def context(workspace_id: str):
     return store.context(workspace_id)
 
 
+@app.get("/v1/workspaces/{workspace_id}/repository")
+def repository(workspace_id: str):
+    result = store.repository(workspace_id)
+    if not result:
+        raise HTTPException(404, "repository not registered")
+    return result
+
+
+@app.get("/v1/workspaces/{workspace_id}/history")
+def history(workspace_id: str):
+    return store.history(workspace_id)
+
+
 @app.get("/v1/workspaces/{workspace_id}/evidence")
-def evidence(workspace_id: str, limit: int = 20):
-    return store.list_evidence(workspace_id, limit=max(1, min(limit, 100)))
+def evidence(workspace_id: str, kind: str = "git_commit", limit: int = 20):
+    return store.list_evidence(workspace_id, kind=kind, limit=max(1, min(limit, 100)))
 
 
 @app.get("/v1/evidence/{evidence_id}")
@@ -76,7 +116,12 @@ def evidence_detail(evidence_id: str):
 @app.get("/v1/workspaces/{workspace_id}/agents-guardrails")
 def agents_guardrails(workspace_id: str):
     """Cited candidates only; Forge never reads or writes AGENTS.md."""
-    return {"candidates": store.guardrail_candidates(workspace_id)}
+    return store.guardrail_candidates(workspace_id)
+
+
+@app.get("/v1/workspaces/{workspace_id}/approved-guardrails")
+def approved_guardrails(workspace_id: str):
+    return store.approved_guardrails(workspace_id)
 
 
 @app.get("/v1/connectors/github")
@@ -86,10 +131,8 @@ def github_credentials():
 
 @app.put("/v1/connectors/github")
 def save_github_credentials(body: GitHubCredentials):
-    if not body.token and not body.webhook_secret:
-        raise HTTPException(422, "provide a token or webhook secret")
     try:
-        return store.save_github_credentials(body.token, body.webhook_secret)
+        return store.save_github_token(body.token)
     except (OSError, RuntimeError) as error:
         raise HTTPException(500, str(error)) from error
 
@@ -97,6 +140,16 @@ def save_github_credentials(body: GitHubCredentials):
 @app.delete("/v1/connectors/github")
 def delete_github_credentials():
     return store.delete_github_credentials()
+
+
+@app.post("/v1/workspaces/{workspace_id}/github/poll")
+def poll_workspace_github(workspace_id: str):
+    try:
+        return poll_github(store, workspace_id)
+    except PermissionError as error:
+        raise HTTPException(409, str(error)) from error
+    except GitHubError as error:
+        raise HTTPException(502, str(error)) from error
 
 
 @app.post("/v1/workspaces/{workspace_id}/imports", status_code=201)
@@ -130,7 +183,26 @@ def review(decision_id: str, body: Review):
     return result
 
 
-dashboard = Path(__file__).resolve().parents[2] / "frontend" / "dist" / "index.html"
+@app.post("/v1/reflections/{reflection_id}/review")
+def review_reflection(reflection_id: str, body: ReflectionReview):
+    if body.status not in {"confirmed", "dismissed"}:
+        raise HTTPException(422, "status must be confirmed or dismissed")
+    result = store.review_reflection(reflection_id, body.status)
+    if not result:
+        raise HTTPException(404, "reflection not found")
+    if "error" in result:
+        raise HTTPException(409, result["error"])
+    return result
+
+
+@app.post("/v1/memory/{entry_id}/archive")
+def archive_memory(entry_id: str):
+    if not store.archive_memory(entry_id):
+        raise HTTPException(404, "active memory entry not found")
+    return {"archived": True}
+
+
+dashboard = Path(__file__).resolve().parent / "static" / "index.html"
 assets = dashboard.parent / "assets"
 if assets.exists():
     app.mount("/assets", StaticFiles(directory=assets), name="assets")

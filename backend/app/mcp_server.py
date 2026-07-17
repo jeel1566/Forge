@@ -26,7 +26,7 @@ def forge_record_decision(statement: str, evidence_quote: str, category: str = "
 @mcp.tool()
 def forge_record_reflection(reflection: str, evidence_quote: str, workspace_id: str = "default") -> dict:
     """Record a pending reflection without accessing chat transcripts."""
-    return current_store().create_pending(workspace_id, reflection, "reflection", evidence_quote, "agent_reflection")
+    return current_store().create_reflection(workspace_id, reflection, evidence_quote)
 
 
 @mcp.tool()
@@ -38,7 +38,19 @@ def forge_get_active_intention(workspace_id: str = "default") -> dict:
 @mcp.tool()
 def forge_get_agents_guardrail_candidates(workspace_id: str = "default") -> dict:
     """Return repeated confirmed guardrails with citations; present any AGENTS.md diff for developer approval before editing."""
-    return {"candidates": current_store().guardrail_candidates(workspace_id)}
+    return current_store().guardrail_candidates(workspace_id)
+
+
+@mcp.tool()
+def forge_propose_agents_guardrail(statement: str, current_agents_content: str = "", workspace_id: str = "default") -> dict:
+    """Create an exact AGENTS.md diff from a cited guardrail. Show it in chat and wait for explicit developer approval before editing the file."""
+    return current_store().propose_agents_guardrail(workspace_id, statement, current_agents_content)
+
+
+@mcp.tool()
+def forge_record_agents_guardrail_approval(statement: str, proposed_diff: str, workspace_id: str = "default") -> dict:
+    """Record an AGENTS.md handoff only after the developer explicitly approved the shown diff and the active agent applied it."""
+    return current_store().record_guardrail_approval(workspace_id, statement, proposed_diff)
 
 
 if __name__ == "__main__":

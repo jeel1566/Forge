@@ -4,21 +4,46 @@ from pathlib import Path
 from .store import Store
 
 
-def ingest_repository(store: Store, workspace_id: str, path: str | Path, limit: int = 50) -> dict:
+def git_output(repository: Path, *arguments: str) -> str:
+    return subprocess.run(["git", "-C", str(repository), *arguments], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout.strip()
+
+
+def optional_git_output(repository: Path, *arguments: str) -> str:
+    result = subprocess.run(["git", "-C", str(repository), *arguments], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def ingest_repository(store: Store, workspace_id: str, path: str | Path) -> dict:
     repository = Path(path).resolve()
     try:
-        commits = subprocess.run(["git", "-C", str(repository), "log", f"--max-count={limit}", "--format=%H%x1f%s%x1e"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout
+        head = git_output(repository, "rev-parse", "HEAD")
+        branch = git_output(repository, "branch", "--show-current") or "detached"
+        remote_url = optional_git_output(repository, "config", "--get", "remote.origin.url")
     except (OSError, subprocess.CalledProcessError) as error:
         raise ValueError(f"Could not read Git history from {repository}") from error
-    store.register_repository(workspace_id, str(repository))
+    previous = store.repository(workspace_id)
+    start = previous["last_ingested_commit"] if previous else None
+    if start:
+        try:
+            subprocess.run(["git", "-C", str(repository), "merge-base", "--is-ancestor", start, head], capture_output=True, check=True)
+            revision_range = f"{start}..{head}"
+        except subprocess.CalledProcessError:
+            revision_range = head
+    else:
+        revision_range = head
+    commits = git_output(repository, "log", "--reverse", "--format=%H%x1f%an%x1f%aI%x1f%s%x1e", revision_range)
+    store.register_repository(workspace_id, str(repository), remote_url or None, branch)
     imported = 0
     for record in commits.split("\x1e"):
         if not record.strip():
             continue
-        commit, subject = record.strip().split("\x1f", 1)
+        commit, author, occurred_at, subject = record.strip().split("\x1f", 3)
         if store.has_evidence(workspace_id, "git_commit", commit):
             continue
-        diff = subprocess.run(["git", "-C", str(repository), "show", "--format=fuller", "--no-ext-diff", commit], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout
-        store.create_evidence(workspace_id, "git_commit", subject, diff, subject, commit, {"commit": commit, "repository": str(repository)})
+        diff = git_output(repository, "show", "--format=fuller", "--no-ext-diff", commit)
+        files = [item for item in git_output(repository, "diff-tree", "--no-commit-id", "--name-only", "-r", commit).splitlines() if item]
+        hunks = [line for line in diff.splitlines() if line.startswith("@@")]
+        store.create_evidence(workspace_id, "git_commit", subject, diff, subject, commit, {"commit": commit, "repository": str(repository), "author": author, "occurred_at": occurred_at, "branch": branch, "files": files}, hunks)
         imported += 1
-    return {"workspace_id": workspace_id, "repository": str(repository), "commits_seen": len([item for item in commits.split("\x1e") if item.strip()]), "commits_imported": imported}
+    store.update_repository_head(workspace_id, head)
+    return {"workspace_id": workspace_id, "repository": str(repository), "branch": branch, "commits_seen": len([item for item in commits.split("\x1e") if item.strip()]), "commits_imported": imported}

@@ -39,14 +39,43 @@ class MemoryProjectionTests(unittest.TestCase):
         self.assertEqual("rejected", saved["review_status"])
         self.assertEqual("The review requested a smaller patch.", saved["evidence_quote"])
 
-    def test_github_credentials_are_masked_and_deletable(self):
+    def test_github_token_is_protected_and_deletable(self):
         store = self.store()
-        saved = store.save_github_credentials("token-value", "secret-value")
+        saved = store.save_github_token("token-value")
         self.assertTrue(saved["token_saved"])
-        self.assertTrue(saved["webhook_secret_saved"])
         self.assertNotIn("token-value", str(saved))
+        self.assertEqual("token-value", store.github_token())
         deleted = store.delete_github_credentials()
         self.assertFalse(deleted["token_saved"])
+
+    def test_migrations_and_evidence_spans_are_persistent(self):
+        store = self.store()
+        store.create_evidence("default", "git_commit", "Add storage", "diff --git", "Add storage", "commit-1", {"files": ["backend/app/store.py"]}, ["@@ -1,1 +1,2 @@"])
+        evidence = store.list_evidence("default")[0]
+        self.assertEqual(2, len(store.get_evidence(evidence["id"])["spans"]))
+        self.assertEqual(1, store.evidence_count("default", "git_commit"))
+        self.assertEqual(5, store.db.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()["version"])
+        self.assertTrue(store.integrity_check()["ok"])
+
+    def test_reflections_are_not_memory_and_memory_can_be_archived(self):
+        store = self.store()
+        decision = store.create_pending("default", "Keep changes focused.", "process", "The review requested a smaller patch.")
+        store.review(decision["id"], "confirmed")
+        reflection = store.create_reflection("default", "Review the failing test before editing.", "The error identifies the failing assertion.")
+        self.assertEqual([], [item for item in store.context("default")["memory"] if item["statement"] == reflection["statement"]])
+        self.assertTrue(store.archive_memory(store.context("default")["memory"][0]["memory_entry_id"]))
+        self.assertEqual([], store.context("default")["memory"])
+        self.assertEqual(1, len(store.history("default")["reflections"]))
+
+    def test_guardrail_requires_two_confirmations_and_returns_a_diff(self):
+        store = self.store()
+        self.assertEqual("insufficient_data", store.propose_agents_guardrail("default", "Run focused tests.", "")["status"])
+        for _ in range(2):
+            decision = store.create_pending("default", "Run focused tests.", "process", "Focused tests caught the regression.")
+            store.review(decision["id"], "confirmed")
+        proposal = store.propose_agents_guardrail("default", "Run focused tests.", "# Repository instructions\n")
+        self.assertEqual("pending_developer_approval", proposal["status"])
+        self.assertIn("+## Confirmed Guardrails", proposal["diff"])
 
 
 if __name__ == "__main__":

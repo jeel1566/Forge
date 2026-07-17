@@ -8,7 +8,7 @@ Forge is deliberately not a chat archive, personality profiler, or generic RAG s
 
 The current slice runs entirely on the developer machine: SQLite is stored in `.forge/forge.sqlite3`, the dashboard binds to `127.0.0.1`, and no cloud account or model API key is required. It imports local Git commits and diffs idempotently, keeps agent proposals pending, and projects only developer-confirmed decisions into memory.
 
-GitHub credentials can be managed from the dashboard and are protected with the current Windows account. GitHub polling and webhook ingestion are not implemented yet.
+GitHub credentials can be managed from the dashboard and are protected with the current Windows account. The dashboard can manually poll a repository's GitHub pull requests and reviews as immutable evidence; scheduled polling and public webhooks remain deferred.
 
 ## Hackathon demo
 
@@ -20,7 +20,15 @@ pnpm --dir frontend build
 forge start --path .
 ```
 
-Open `http://127.0.0.1:8000`. Forge imports local Git commits when it starts and exposes recent evidence in Today. MCP can create pending decisions and reflections, but never confirms memory. Forge also never writes `AGENTS.md`: an active agent must present a cited diff and receive approval first.
+Open `http://127.0.0.1:8000`. Forge imports local Git commits when it starts, and Today can manually poll GitHub PR/review evidence when a token is configured. MCP can create pending decisions and reflections, but never confirms memory. Forge also never writes `AGENTS.md`: an active agent must present a cited diff and receive approval first.
+
+Create a local backup or non-secret JSON export when needed:
+
+```bash
+forge backup --path . --output forge-backup.sqlite3
+forge export --path . --output forge-export.json
+forge doctor --path .
+```
 
 ## Non-negotiable rules
 

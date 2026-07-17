@@ -1,6 +1,7 @@
 node_modules/
 .pnpm-store/
 *.egg-info/
+build/
 __pycache__/
 *.py[cod]
 frontend/dist/
