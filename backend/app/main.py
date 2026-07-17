@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .git import ingest_repository
+from .git import ingest_repository, workspace_id_for_repository
 from .github import GitHubError, poll_github
 from .store import Store
 from .workflow import create_candidate
@@ -59,6 +59,10 @@ class GitImport(BaseModel):
     path: str = "."
 
 
+class RepositoryRegistration(BaseModel):
+    path: str = Field(min_length=1)
+
+
 class GitHubCredentials(BaseModel):
     token: str = Field(min_length=1)
 
@@ -70,6 +74,21 @@ class ReflectionReview(BaseModel):
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "forge", "database": str(store.path)}
+
+
+@app.get("/v1/repositories")
+def repositories():
+    return store.repositories()
+
+
+@app.post("/v1/repositories", status_code=201)
+def register_repository(body: RepositoryRegistration):
+    try:
+        workspace_id = workspace_id_for_repository(body.path)
+        result = ingest_repository(store, workspace_id, body.path)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    return {"workspace_id": workspace_id, "repository": store.repository(workspace_id), "import": result}
 
 
 @app.get("/v1/workspaces/{workspace_id}/today")

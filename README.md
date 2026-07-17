@@ -22,6 +22,8 @@ forge start --path .
 
 Open `http://127.0.0.1:8000`. Forge imports local Git commits when it starts, and Today can manually poll GitHub PR/review evidence when a token is configured. MCP can create pending decisions and reflections, but never confirms memory. Forge also never writes `AGENTS.md`: an active agent must present a cited diff and receive approval first.
 
+One local Forge runtime can register and switch among local Git repositories from Today. The startup path supplies the first repository and location of the local SQLite database; add other repositories with the dashboard rather than starting another port.
+
 Create a local backup or non-secret JSON export when needed:
 
 ```bash
@@ -43,6 +45,7 @@ forge doctor --path .
 - [Runtime architecture](docs/ARCHITECTURE.md)
 - [System invariants and lifecycle](docs/SYSTEM-DESIGN.md)
 - [API and MCP contracts](docs/API-MCP-SPEC.md)
+- [Codex and Antigravity setup](docs/AGENT-SETUP.md)
 - [Data model and database constraints](docs/DATA-MODEL.md)
 - [Implementation plan](docs/IMPLEMENTATION-PLAN.md)
 - [Local setup](docs/OPEN-SOURCE-SETUP.md)

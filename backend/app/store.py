@@ -126,6 +126,9 @@ class Store:
         row = self.db.execute("SELECT * FROM repositories WHERE workspace_id=?", (workspace_id,)).fetchone()
         return dict(row) if row else None
 
+    def repositories(self):
+        return [dict(row) for row in self.db.execute("SELECT * FROM repositories ORDER BY created_at ASC").fetchall()]
+
     def update_repository_head(self, workspace_id: str, commit: str):
         self.db.execute("UPDATE repositories SET last_ingested_commit=? WHERE workspace_id=?", (commit, workspace_id))
         self.db.commit()

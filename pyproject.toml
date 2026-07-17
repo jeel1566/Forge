@@ -10,6 +10,7 @@ dependencies = [
 
 [project.scripts]
 forge = "backend.app.cli:main"
+forge-mcp = "backend.app.mcp_server:main"
 
 [tool.setuptools.packages.find]
 include = ["backend*"]

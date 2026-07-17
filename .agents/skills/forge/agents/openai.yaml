@@ -1,0 +1,4 @@
+interface:
+  display_name: "Forge Memory"
+  short_description: "Use cited local project memory safely"
+  default_prompt: "Use $forge to retrieve cited context and propose one reviewable memory item."

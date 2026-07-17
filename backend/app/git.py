@@ -1,4 +1,5 @@
 import subprocess
+from hashlib import sha256
 from pathlib import Path
 
 from .store import Store
@@ -11,6 +12,13 @@ def git_output(repository: Path, *arguments: str) -> str:
 def optional_git_output(repository: Path, *arguments: str) -> str:
     result = subprocess.run(["git", "-C", str(repository), *arguments], capture_output=True, text=True, encoding="utf-8", errors="replace")
     return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def workspace_id_for_repository(path: str | Path) -> str:
+    repository = Path(path).resolve()
+    remote_url = optional_git_output(repository, "config", "--get", "remote.origin.url")
+    identity = remote_url.rstrip("/").removesuffix(".git").lower() or str(repository).lower()
+    return f"repo-{sha256(identity.encode()).hexdigest()[:12]}"
 
 
 def ingest_repository(store: Store, workspace_id: str, path: str | Path) -> dict:

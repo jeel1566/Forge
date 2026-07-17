@@ -57,6 +57,12 @@ class MemoryProjectionTests(unittest.TestCase):
         self.assertEqual(5, store.db.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()["version"])
         self.assertTrue(store.integrity_check()["ok"])
 
+    def test_repository_registry_lists_multiple_workspaces(self):
+        store = self.store()
+        store.register_repository("repo-one", ".", "https://github.com/example/one.git", "main")
+        store.register_repository("repo-two", "..", "https://github.com/example/two.git", "main")
+        self.assertEqual(["repo-one", "repo-two"], [item["workspace_id"] for item in store.repositories()])
+
     def test_reflections_are_not_memory_and_memory_can_be_archived(self):
         store = self.store()
         decision = store.create_pending("default", "Keep changes focused.", "process", "The review requested a smaller patch.")
