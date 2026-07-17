@@ -1,35 +1,25 @@
-# Technical Requirements Document
+# Technical requirements
 
-## Chosen stack
+## Runtime
 
-| Area | Decision |
+Use one TypeScript codebase: a web/API process, a worker process, Supabase PostgreSQL, and a model-provider adapter. Both processes use the same service layer; only server-side code holds the Supabase service-role key.
+
+| Boundary | Responsibility |
 |---|---|
-| Database | Supabase-hosted PostgreSQL |
-| API/dashboard | TypeScript web application and server API |
-| Background processing | A separate TypeScript worker using a Postgres-backed jobs table |
-| Ingestion | GitHub webhooks plus MCP-controlled agent writes |
-| Database access | Server-side Supabase service-role client only |
-| Model calls | Provider adapter behind extraction and verification jobs |
+| HTTP API | Validate input, create durable work, return responses. |
+| Worker | Claim jobs, normalize evidence, call models, and run deterministic checks. |
+| PostgreSQL | System of record, idempotency boundary, and durable queue. |
+| Provider adapter | Schema-validated extraction and verification requests. |
 
 ## Constraints
 
-- The webhook route must return `202` without waiting for an LLM.
-- All state-changing work must be idempotent.
-- The browser must not access tables with a service-role key.
-- Raw source payloads may use JSONB; source-of-truth relationships must remain relational.
-- Every model output must validate against a JSON schema before persistence.
+- Webhooks verify the raw-body HMAC, transactionally record the delivery and job, then return `202` without model work.
+- All write paths are idempotent; model JSON validates before any derived write.
+- Jobs retry three times with backoff, then remain visible as `dead_letter`.
+- Webhook acknowledgement is under one second; cited-context reads are under two seconds excluding model work.
+- JSONB holds source payloads only; queryable relationships stay relational.
 
-## Non-functional requirements
-
-| Concern | Requirement |
-|---|---|
-| Auditability | Every claim has evidence spans and model/version metadata. |
-| Reliability | Jobs retry three times with backoff, then become visible dead-letter failures. |
-| Performance | Webhook acknowledgement under one second; context response under two seconds excluding model work. |
-| Privacy | No passive agent-chat collection; submitted evidence remains workspace-scoped. |
-| Operability | Local development, hosted Supabase, migrations, seed data, and a health check are documented. |
-
-## Required configuration
+## Configuration
 
 ```text
 SUPABASE_URL=
@@ -40,4 +30,4 @@ LLM_API_KEY=
 FORGE_BASE_URL=http://localhost:3000
 ```
 
-`GITHUB_TOKEN` is limited to the demo repository in the MVP. A GitHub App replaces it in a later release.
+`GITHUB_TOKEN` is limited to the demo repository. A GitHub App is a later replacement, not an MVP dependency.

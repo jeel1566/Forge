@@ -1,30 +1,34 @@
-# System Design
+# System design
 
 ## Lifecycle
 
 ```text
-GitHub or MCP input
-  -> ingestion event
-  -> immutable evidence item and evidence spans
-  -> extraction or normalization job
-  -> pending decision
-  -> developer confirm/reject
-  -> current project-memory projection
-  -> later evidence verification
-  -> pattern aggregation
-  -> one coaching cycle
-  -> metric follow-up and escalation if needed
+input -> ingestion event + job -> immutable evidence + spans -> pending decision
+      -> developer confirms/rejects -> current-memory projection
+      -> later-evidence verification -> qualifying pattern -> one coaching cycle
 ```
 
-## Core invariants
+Each arrow is an explicit state transition, not an unconstrained model action. Evidence stays immutable; interpretations are versioned; the current-memory table is only a projection of confirmed decisions.
 
-1. A decision has at least one cited evidence span.
-2. Only a confirmed, sufficiently explicit decision can create current project memory.
-3. Verification uses later evidence and returns `insufficient_data` when no conclusion is justified.
-4. A pattern requires at least three independent observations and a measurable outcome/review-cost signal.
-5. A workspace has at most one active coaching cycle.
-6. Two missed attempts on the same pattern escalate instead of repeating the same advice.
+## State rules
 
-## Failure handling
+| State | Created by | Exit condition |
+|---|---|---|
+| `ingestion_event` | API after validation | A worker normalizes it exactly once. |
+| `evidence_item` | Worker | Immutable after creation; supports multiple spans. |
+| Pending decision | Extractor or MCP pending write | Developer confirms or rejects it. |
+| Current memory entry | Review action | Superseded by another confirmed decision for its key. |
+| Verification run | Scheduled/later-evidence job | Returns a cited result or `insufficient_data`. |
+| Coaching cycle | Deterministic pattern selection | Becomes met, missed, dismissed, or escalated. |
 
-Invalid webhook signatures are rejected. Duplicate deliveries are accepted but ignored after deduplication. Invalid model JSON fails the job and retries. A third failure creates a dead-letter job and dashboard alert; it never writes partial derived state.
+## Invariants
+
+1. A decision has at least one exact evidence span.
+2. Only an explicit, confirmed decision creates current memory.
+3. Missing later evidence produces `insufficient_data`; silence is never confirmation.
+4. A coachable pattern needs three independent observations, citations, recent evidence, and a measurable outcome or review-cost signal.
+5. One workspace has at most one active coaching cycle; two misses escalate for developer review.
+
+## Failure and recovery
+
+Invalid GitHub signatures are rejected. Duplicate deliveries are accepted but become no-ops through unique keys. Invalid model output records a failed attempt and retries with backoff; after the third failure, the job becomes a visible dead letter and writes no partial derived state. Operators can retry a dead-letter job after fixing configuration or provider availability because every step is idempotent.

@@ -1,37 +1,25 @@
-# API and MCP Specification
+# API and MCP contract
 
-## REST surface
+## HTTP API
 
-| Method | Route | Purpose |
+| Method | Route | Result |
 |---|---|---|
-| POST | `/v1/webhooks/github` | Receive and validate a GitHub delivery. |
-| POST | `/v1/workspaces/:id/imports` | Import manual agent/chat/error evidence. |
-| GET | `/v1/workspaces/:id/context` | Return compact cited project context. |
-| GET | `/v1/workspaces/:id/decisions` | List/filter decisions. |
-| POST | `/v1/decisions/:id/review` | Confirm or reject a decision. |
-| GET | `/v1/workspaces/:id/patterns` | List patterns and observations. |
-| GET | `/v1/workspaces/:id/coaching/active` | Return the active goal or insufficient-data state. |
+| POST | `/v1/webhooks/github` | Validates HMAC, records an idempotent delivery and durable job, returns `202`. |
+| POST | `/v1/workspaces/:id/imports` | Records manual or agent evidence. |
+| GET | `/v1/workspaces/:id/context` | Returns compact, cited confirmed memory and active coaching. |
+| GET | `/v1/workspaces/:id/decisions` | Lists decisions with status and citations. |
+| POST | `/v1/decisions/:id/review` | Confirms or rejects a pending decision. |
+| GET | `/v1/workspaces/:id/patterns` | Lists cited patterns and observations. |
+| GET | `/v1/workspaces/:id/coaching/active` | Returns the single goal or `insufficient_data`. |
 
 ## MCP tools
 
-| Tool | Access | Contract |
+| Tool | Access | Guarantee |
 |---|---|---|
-| `forge_get_project_context` | Read | Returns up to 12 relevant, cited confirmed memory items and active coaching. |
-| `forge_search_decisions` | Read | Searches decision history with citations and review status. |
-| `forge_record_decision` | Pending write | Stores agent evidence plus a pending decision; never updates memory. |
-| `forge_get_active_coaching` | Read | Returns one goal or an honest insufficient-data response. |
-| `forge_record_observation` | Pending write | Stores error, review, or debugging evidence for later analysis. |
+| `forge_get_project_context` | Read | At most 12 relevant, cited confirmed items plus active coaching. |
+| `forge_search_decisions` | Read | Searchable decision history with citations and status. |
+| `forge_record_decision` | Pending write | Creates evidence, span, and a pending decision only. |
+| `forge_get_active_coaching` | Read | One goal or an honest insufficient-data response. |
+| `forge_record_observation` | Pending write | Stores cited error, review, or debugging evidence for later analysis. |
 
-## `forge_record_decision` input
-
-```json
-{
-  "workspace_id": "uuid",
-  "statement": "Defer OAuth until the ingestion demo works.",
-  "category": "scope",
-  "evidence_quote": "Let's skip OAuth until the core ingestion demo works.",
-  "explicitness": "explicit"
-}
-```
-
-The server creates an `agent_conversation` evidence item, its evidence span, and a pending decision. A browser confirmation is still required for project-memory promotion.
+`forge_record_decision` accepts `workspace_id`, `statement`, `category`, `evidence_quote`, and `explicitness`. The server records an `agent_conversation` evidence item and span; browser review remains required for promotion.

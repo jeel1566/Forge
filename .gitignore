@@ -1,0 +1,9 @@
+node_modules/
+.pnpm-store/
+*.egg-info/
+__pycache__/
+*.py[cod]
+frontend/dist/
+*.tsbuildinfo
+.env
+.DS_Store
