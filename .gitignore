@@ -6,4 +6,5 @@ __pycache__/
 frontend/dist/
 *.tsbuildinfo
 .env
+.forge/
 .DS_Store

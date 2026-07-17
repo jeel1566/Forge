@@ -1,33 +1,33 @@
 # Forge
 
-Forge is an evidence-backed memory and coaching loop for one developer. It turns GitHub events and voluntary agent observations into cited, reviewable decisions; only confirmed decisions become project memory. Repeated, measurable evidence can produce one coaching goal.
+Forge is a local-first, evidence-backed memory layer for coding agents. It turns local Git evidence and voluntary agent observations into cited, reviewable decisions; only confirmed decisions become project memory.
 
 Forge is deliberately not a chat archive, personality profiler, or generic RAG store. When the evidence is insufficient, it says so.
 
 ## Status
 
-This repository currently contains the implementation specification and runbooks. The commands below are the delivery contract for the first implementation slice; they will work after that slice is scaffolded.
+The current slice runs entirely on the developer machine: SQLite is stored in `.forge/forge.sqlite3`, the dashboard binds to `127.0.0.1`, and no cloud account or model API key is required. It imports local Git commits and diffs idempotently, keeps agent proposals pending, and projects only developer-confirmed decisions into memory.
+
+GitHub credentials can be managed from the dashboard and are protected with the current Windows account. GitHub polling and webhook ingestion are not implemented yet.
 
 ## Hackathon demo
 
-The judge path is: seed or receive one GitHub delivery, inspect its evidence, confirm one pending decision, and view one cited coaching goal. The app must work locally with no source changes after configuration.
+The demo path is: import local Git evidence, submit a cited pending decision through MCP, edit or confirm it in Today, then retrieve the resulting cited memory in the next agent session.
 
 ```bash
-cp .env.example .env
-pnpm install
-pnpm supabase:push
-pnpm dev       # dashboard and HTTP API
-pnpm worker    # durable background jobs
+pip install -e .
+pnpm --dir frontend build
+forge start --path .
 ```
 
-Open `http://localhost:3000`. Use the seeded demo evidence or configure a GitHub webhook for `POST /v1/webhooks/github`.
+Open `http://127.0.0.1:8000`. Forge imports local Git commits when it starts and exposes recent evidence in Today. MCP can create pending decisions and reflections, but never confirms memory. Forge also never writes `AGENTS.md`: an active agent must present a cited diff and receive approval first.
 
 ## Non-negotiable rules
 
 1. Evidence is immutable and every derived claim links to exact evidence spans.
 2. Agent and model output is pending evidence, never current memory by default.
 3. No later evidence means `insufficient_data`, not confirmation.
-4. Only one coaching cycle may be active in a workspace.
+4. One active developer intention may exist per workspace.
 
 ## Documentation
 

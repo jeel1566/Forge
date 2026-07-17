@@ -5,10 +5,11 @@ requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.30",
-  "langgraph>=0.2",
-  "mcp>=1.0",
-  "supabase>=2.0"
+  "mcp>=1.0"
 ]
+
+[project.scripts]
+forge = "backend.app.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["backend*"]

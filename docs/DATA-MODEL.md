@@ -1,32 +1,30 @@
 # Data model
 
-## Entity map
+Forge uses one local SQLite database per selected repository by default: `.forge/forge.sqlite3`.
+
+## Current local schema
 
 ```text
-workspace -> repositories -> ingestion_events -> evidence_items -> evidence_spans
+repositories
+evidence_items -> evidence_spans
 decisions <-> decision_citations -> evidence_spans
-verification_runs <-> verification_citations -> evidence_spans
-patterns -> pattern_observations -> decisions or evidence_items
-coaching_cycles -> metric_snapshots
-project_memory_entries -> confirmed decisions
-jobs -> ingestion_events or derived-work idempotency keys
+intentions
+connector_state + connector_secrets
 ```
 
-## Entities
-
-| Entity | Responsibility | Important rule |
+| Entity | Responsibility | Rule |
 |---|---|---|
-| `workspaces` / `repositories` | Ownership and external repository identity. | The hackathon uses one workspace; the model remains repository-aware. |
-| `ingestion_events` | Immutable record of an accepted external delivery. | Unique provider delivery identity makes replay a no-op. |
-| `evidence_items` | Immutable source facts: commits, PRs, reviews, agent observations, or errors. | Raw provider content may live in `raw_payload JSONB`. |
-| `evidence_spans` | Exact quote, line range, or diff hunk. | Every displayed derived claim links to one or more spans. |
-| `decisions` | Extracted rationale with pending/confirmed/rejected review state. | Pending is the default; confirmation is explicit. |
-| `verification_runs` | Dated comparison against later evidence. | Absence of evidence returns `insufficient_data`. |
-| `patterns` / `pattern_observations` | Repeated observable behaviour and its cited backing. | A pattern observation references exactly one decision or evidence item. |
-| `coaching_cycles` / `metric_snapshots` | One goal, target, follow-up, and measured result. | One active cycle per workspace. |
-| `project_memory_entries` | Versioned current projection of confirmed decisions. | One current key per workspace. |
-| `jobs` | Durable, retryable background work. | Unique `(type, idempotency_key)` prevents repeated effects. |
+| `repositories` | Maps a workspace identifier to one local Git path. | Local Git is the default evidence source. |
+| `evidence_items` | Immutable commits, agent decisions, and reflections. | A Git commit is unique per workspace and commit hash. |
+| `evidence_spans` | Exact quoted commit subject or agent-supplied supporting text. | Derived decisions cite spans, not unstructured IDs. |
+| `decisions` | Pending, confirmed, or rejected developer-review items. | Only confirmed decisions are returned as memory. |
+| `decision_citations` | Relates decisions to one or more exact evidence spans. | Citations remain after rejection. |
+| `intentions` | The one developer-chosen active intention per workspace. | One row per workspace. |
+| `connector_state` | Non-secret GitHub connector status. | Status never contains credentials. |
+| `connector_secrets` | GitHub token and webhook secret encrypted with Windows DPAPI. | Values are never returned by the API or dashboard. |
 
-## Relationship rules
+Confirmed memory is currently a read projection of confirmed decisions, keeping the first useful implementation small while preserving immutable evidence and review history.
 
-Use citation join tables (`decision_citations` and `verification_citations`), never arrays of foreign keys. Keep searchable and constrained fields relational even when retaining provider payloads in JSONB. Confirming a decision creates or supersedes a current project-memory projection; it does not mutate evidence or the original decision record.
+## Deferred schema
+
+`ingestion_events`, GitHub PR/review evidence, verification runs, pattern observations, versioned memory projections, and optional sync remain deferred until the local evidence loop needs them. Cloud accounts, raw chat transcripts, and automatic `AGENTS.md` edits are not part of the schema.

@@ -1,44 +1,26 @@
 # Hackathon demo runbook
 
-This tutorial validates Forge's central promise: a cited source becomes a pending decision, and a developer—not a model—decides whether it becomes memory.
+This demo proves Forge's central promise: local Git evidence and an agent proposal become a pending decision, and only a developer can promote it to memory.
 
-## Prerequisites
+## Run the demo
 
-Install Node.js, pnpm, Docker (optional), and the Supabase CLI. Create a Supabase project and copy the required placeholders into `.env`:
-
-```text
-SUPABASE_URL=
-SUPABASE_SERVICE_ROLE_KEY=
-GITHUB_WEBHOOK_SECRET=
-GITHUB_TOKEN=
-LLM_API_KEY=
-FORGE_BASE_URL=http://localhost:3000
+```bash
+pip install -e .
+pnpm --dir frontend build
+forge start --path .
 ```
 
-## Run the deterministic demo
+Open `http://127.0.0.1:8000`. Forge imports the repository's Git commits into the local SQLite file at `.forge/forge.sqlite3`.
 
-1. Install dependencies and prepare the database.
+## Show the memory loop
 
-   ```bash
-   pnpm install
-   pnpm supabase:push
-   ```
+1. Through MCP, call `forge_record_decision` with an explicit statement and supporting quote.
+2. In Today, inspect the pending decision and its citation.
+3. Confirm it. The next `forge_get_project_context` returns it as cited confirmed memory.
+4. Set one active intention and show it in the same MCP context response.
 
-2. Start the HTTP application and worker in separate terminals.
+No account, webhook, API key, or raw transcript access is required. Rejected proposals remain visible with their immutable evidence and never enter memory.
 
-   ```bash
-   pnpm dev
-   pnpm worker
-   ```
+## Show the AGENTS.md boundary
 
-3. Open `http://localhost:3000`, load seeded evidence, and open its generated pending decision. Confirm it and verify that the Project Memory view shows its evidence citation.
-
-You should be able to inspect the original evidence, the exact supporting span, the decision status, and the resulting current-memory entry. If no decision is generated, inspect the dead-letter view first; invalid provider output must never create a partial decision.
-
-## Connect GitHub
-
-Configure a webhook for `POST /v1/webhooks/github` using `GITHUB_WEBHOOK_SECRET`. Forge verifies the raw request body, returns `202`, and processes it asynchronously. Replay the same delivery to verify idempotency: it must create no second evidence item or job.
-
-## Verify the coaching loop
-
-Use seed data that contains the required observations for one fixed detector. Forge should show a cited pattern, one mapped principle, one active measurable goal, and a follow-up state. An absent or weak evidence set must be displayed as `insufficient_data`, not advice.
+When `forge_get_agents_guardrail_candidates` returns a repeated confirmed item, the active agent must show an exact `AGENTS.md` diff in chat. Apply it only after the developer explicitly approves. Forge itself does not read or write `AGENTS.md`.

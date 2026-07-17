@@ -1,63 +1,22 @@
-# Open-Source Setup and Distribution
+# Open-source setup
 
-## Release goal
-
-An evaluator must be able to clone Forge, configure a Supabase project and GitHub repository, run the app locally, and see evidence flow to a pending decision without modifying source code.
-
-## Required repository artifacts
-
-```text
-.env.example
-docker-compose.yml
-Dockerfile
-package.json
-pnpm-lock.yaml
-apps/web/
-apps/worker/
-packages/core/
-packages/mcp-server/
-supabase/migrations/
-supabase/seed.sql
-docs/
-LICENSE
-CONTRIBUTING.md
-```
-
-## Required setup path
-
-1. Create a Supabase project and copy its URL and service-role key into `.env`.
-2. Add a GitHub webhook pointing to `/v1/webhooks/github`, configured with `GITHUB_WEBHOOK_SECRET`.
-3. Apply migrations and seed the `default` workspace and fixed principles.
-4. Start the web/API app and worker.
-5. Push a commit or submit an MCP observation.
-6. Open the dashboard and confirm/reject the generated pending decision.
-
-## Required commands to deliver
+Forge runs locally with SQLite and no account, token, or model API key.
 
 ```bash
-pnpm install
-pnpm supabase:push
-pnpm dev
-pnpm worker
-pnpm test
-docker compose up --build
+pip install -e .
+pnpm --dir frontend build
+forge start --path .
 ```
 
-## Environment template
+Open `http://127.0.0.1:8000`. The server stores data at `.forge/forge.sqlite3` inside the selected repository and imports local Git commits at startup.
 
-```text
-SUPABASE_URL=
-SUPABASE_SERVICE_ROLE_KEY=
-GITHUB_WEBHOOK_SECRET=
-GITHUB_TOKEN=
-LLM_API_KEY=
-FORGE_BASE_URL=http://localhost:3000
-```
+## Agent connection
 
-Never commit a populated `.env` file. Use placeholder values only in `.env.example`.
+Run `python -m backend.app.mcp_server` from an active Codex or Antigravity MCP configuration. MCP reads return only confirmed, cited memory and an active intention. MCP writes create pending decisions or reflections; they never confirm memory or access raw chat transcripts.
 
-## Open-source defaults
+## Privacy defaults
 
-- License: MIT for the hackathon repository unless a different contributor policy is required.
-- No hosted account is required for local app use, but Supabase remains the managed database dependency.
-- Provide a demo fixture repository or seeded sample evidence so judges can evaluate the feedback loop without connecting personal data.
+- Forge binds to `127.0.0.1` only.
+- SQLite, Git evidence, and exports remain local.
+- GitHub polling is optional future work; public webhooks are not required.
+- Forge never writes `AGENTS.md`. An agent must show an exact proposed diff and receive explicit approval before applying it.

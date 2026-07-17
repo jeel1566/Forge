@@ -5,10 +5,8 @@
   "scripts": {
     "dev": "pnpm --dir frontend dev",
     "api": "uvicorn backend.app.main:app --reload",
-    "worker": "python -m backend.app.worker",
     "mcp": "python -m backend.app.mcp_server",
-    "test": "python -m unittest discover -s backend/tests",
-    "supabase:push": "supabase db push"
+    "test": "python -m unittest discover -s backend/tests"
   },
   "packageManager": "pnpm@11.9.0"
 }
