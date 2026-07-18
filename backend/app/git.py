@@ -3,6 +3,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from .store import Store
+from .worktree import git_common_dir
 
 
 def git_output(repository: Path, *arguments: str) -> str:
@@ -17,7 +18,11 @@ def optional_git_output(repository: Path, *arguments: str) -> str:
 def workspace_id_for_repository(path: str | Path) -> str:
     repository = Path(path).resolve()
     remote_url = optional_git_output(repository, "config", "--get", "remote.origin.url")
-    identity = remote_url.rstrip("/").removesuffix(".git").lower() or str(repository).lower()
+    try:
+        local_identity = git_common_dir(repository)
+    except ValueError:
+        local_identity = str(repository)
+    identity = remote_url.rstrip("/").removesuffix(".git").lower() or local_identity.lower()
     return f"repo-{sha256(identity.encode()).hexdigest()[:12]}"
 
 
@@ -27,6 +32,7 @@ def ingest_repository(store: Store, workspace_id: str, path: str | Path) -> dict
         head = git_output(repository, "rev-parse", "HEAD")
         branch = git_output(repository, "branch", "--show-current") or "detached"
         remote_url = optional_git_output(repository, "config", "--get", "remote.origin.url")
+        common_dir = git_common_dir(repository)
     except (OSError, subprocess.CalledProcessError) as error:
         raise ValueError(f"Could not read Git history from {repository}") from error
     previous = store.repository(workspace_id)
@@ -40,7 +46,7 @@ def ingest_repository(store: Store, workspace_id: str, path: str | Path) -> dict
     else:
         revision_range = head
     commits = git_output(repository, "log", "--reverse", "--format=%H%x1f%an%x1f%aI%x1f%s%x1e", revision_range)
-    store.register_repository(workspace_id, str(repository), remote_url or None, branch)
+    store.register_repository(workspace_id, str(repository), remote_url or None, branch, common_dir)
     imported = 0
     for record in commits.split("\x1e"):
         if not record.strip():

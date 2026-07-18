@@ -1,0 +1,11 @@
+{
+  "forge-safe-stop-metadata": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "forge-antigravity-stop-hook",
+        "timeout": 5
+      }
+    ]
+  }
+}

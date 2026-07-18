@@ -1,32 +1,32 @@
 ---
 name: forge
-description: Use Forge's local MCP memory when starting or ending a coding session in a Forge-enabled repository. Retrieve cited confirmed context, optionally propose one evidence-backed pending decision or reflection, and handle developer-approved AGENTS.md guardrails without reading chat transcripts.
+description: Use Forge's local shared project memory at the start and end of a coding session. Retrieve persisted context, then submit a compact self-written evidence-backed session outcome without sending a raw chat transcript.
 ---
 
-# Forge Memory
+# Forge shared memory
 
-Use Forge as a local, developer-reviewed memory layer. Treat it as optional: if Forge is offline, say so and continue normal coding work without inventing context.
+Forge is the shared local notebook for this repository. Codex summarises Codex work; Antigravity summarises Antigravity work. Do not ask one agent to summarise the other and do not read, scrape, or upload a raw chat transcript.
 
 ## Session start
 
-1. Call `forge_get_project_context` for the active repository workspace.
-2. Use only returned confirmed memory and citations as Forge context.
-3. Do not infer memory from a prior chat, scrape transcripts, or treat pending decisions as memory.
+1. Call `forge_get_project_context` for the active workspace.
+2. Treat returned cited decisions and approved handoffs as project context; do not invent missing memory.
+3. For meaningful work, call `forge_start_work_session` with the active worktree.
+4. If Forge is offline, say so briefly and continue normal work without shared context.
 
-## Session end
+## Session end: current tools
 
-When a developer has expressed a reusable decision or reflection and there is a short, concrete supporting quote, voluntarily call exactly one of:
+1. Call `forge_finish_work_session`, `forge_get_worktree_delta`, `forge_get_session_capture_guidance`, and `forge_get_recent_evidence`.
+2. Write a concise self-summary: goal, what changed, why, prior approach, failure/problem, fix, alternatives rejected, validation, and unresolved risk.
+3. Split unrelated completed changes into separate cited handoffs and submit them with `forge_record_session_contexts`.
+4. Use `forge_record_decision` only for a reusable evidence-backed decision; use `forge_record_reflection` for a non-durable observation.
 
-- `forge_record_decision` for a candidate engineering guardrail or decision.
-- `forge_record_reflection` for a reviewed observation that should not become memory.
+Current Forge writes are review-first. Do not claim that a pending handoff or decision is active memory.
 
-Supply only the explicit statement and supporting quote. Explain that the item is pending developer review. Do not create a draft when the evidence is weak or absent.
+## Rule safety
 
-## Guardrails
+The current implementation requires a developer-approved `AGENTS.md` handoff. Do not write `AGENTS.md` until the exact proposed diff has been shown and approved. Never auto-merge, resolve conflicts, expose secrets, or treat a chat claim as evidence.
 
-1. Call `forge_get_agents_guardrail_candidates` only for repeated confirmed patterns.
-2. Read `AGENTS.md` through normal repository access, then call `forge_propose_agents_guardrail` with its current content.
-3. Show the exact returned diff in chat and wait for an explicit developer yes.
-4. Only then edit `AGENTS.md` and call `forge_record_agents_guardrail_approval`.
+## V1 target
 
-Never let Forge write `AGENTS.md`, confirm memory, read raw chats, score a developer, or automate their decisions.
+The documented new Forge design adds workspace-level `approval` and `autonomous` rule policies, deterministic evidence gates, managed rule projection, verification, and rollback. Do not call target-only tools or assume automatic rule writing until they exist in the installed MCP server.

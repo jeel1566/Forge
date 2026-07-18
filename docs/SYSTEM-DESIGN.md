@@ -1,34 +1,37 @@
 # System design
 
-## Lifecycle
+## Canonical record
 
-```text
-input -> ingestion event + job -> immutable evidence + spans -> pending decision
-      -> developer confirms/rejects -> current-memory projection
-      -> later-evidence verification -> qualifying pattern -> one coaching cycle
+SQLite is Forge's canonical memory. `AGENTS.md` is a generated, human-readable projection of active scoped rules, not the source of truth. Each rule version links back to a decision, session summary, and immutable evidence.
+
+## Learning state machine
+
+```mermaid
+stateDiagram-v2
+  [*] --> observed
+  observed --> candidate: structured summary + citation
+  candidate --> active: approval or autonomous gate
+  active --> verified: later supporting evidence
+  active --> contradicted: later conflicting evidence
+  contradicted --> retracted: rollback
+  active --> archived: superseded or expired
+  candidate --> archived: rejected or insufficient evidence
 ```
-
-Each arrow is an explicit state transition, not an unconstrained model action. Evidence stays immutable; interpretations are versioned; the current-memory table is only a projection of confirmed decisions.
-
-## State rules
-
-| State | Created by | Exit condition |
-|---|---|---|
-| `ingestion_event` | API after validation | A worker normalizes it exactly once. |
-| `evidence_item` | Worker | Immutable after creation; supports multiple spans. |
-| Pending decision | Extractor or MCP pending write | Developer confirms or rejects it. |
-| Current memory entry | Review action | Superseded by another confirmed decision for its key. |
-| Verification run | Scheduled/later-evidence job | Returns a cited result or `insufficient_data`. |
-| Coaching cycle | Deterministic pattern selection | Becomes met, missed, dismissed, or escalated. |
 
 ## Invariants
 
-1. A decision has at least one exact evidence span.
-2. Only an explicit, confirmed decision creates current memory.
-3. Missing later evidence produces `insufficient_data`; silence is never confirmation.
-4. A coachable pattern needs three independent observations, citations, recent evidence, and a measurable outcome or review-cost signal.
-5. One workspace has at most one active coaching cycle; two misses escalate for developer review.
+1. Forge stores no raw chat transcript; agents submit their own short structured summaries.
+2. Every rule version has scope, provenance, evidence IDs, activation mode, and state history.
+3. Approval mode never activates a rule before explicit approval of its exact projection.
+4. Autonomous mode never activates a rule without a deterministic evidence threshold, a rollback record, and a review/expiry time.
+5. Later silence is `insufficient_data`, never confirmation.
+6. Rules cannot grant permission to merge, resolve conflicts, expose secrets, or write GitHub data.
+7. Local functionality remains available when GitHub or the network is unavailable.
 
-## Failure and recovery
+## Evidence quality
 
-Invalid GitHub signatures are rejected. Duplicate deliveries are accepted but become no-ops through unique keys. Invalid model output records a failed attempt and retries with backoff; after the third failure, the job becomes a visible dead letter and writes no partial derived state. Operators can retry a dead-letter job after fixing configuration or provider availability because every step is idempotent.
+Strong evidence is a failed/passing verification command, Git change, reviewed PR comment, reproducible error, revert, or explicitly linked external record. Agent prose explains context but cannot alone raise a rule to active status.
+
+## Retention
+
+Keep active rules and their provenance until superseded or archived. Retain sync diagnostics for a bounded local window (currently 30 days and 500 events). Never retain tokens, authorization headers, or raw sensitive GitHub responses.

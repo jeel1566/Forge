@@ -1,44 +1,26 @@
-# Extraction, Verification, and Coaching Pipeline
+# Decision, verification, and rule evolution
 
-## The Forge feedback loop
+Forge does not use a hidden extractor. The working agent produces a structured reflection from its own session, then Forge applies deterministic validation and lifecycle rules.
+
+## Structured reflection prompt
 
 ```text
-Evidence
-  -> Git commits, PR reviews, AI conversations, errors
-  -> Pattern detection
-  -> Repeated large commits, AI-first debugging, repeated review comments
-  -> Engineering principle
-  -> Incremental development, hypothesis-driven debugging, root cause analysis
-  -> Intervention
-  -> One recommendation, one measurable goal, check next week
+Retrieve relevant active rules and similar past failures.
+Report: goal/scope; observed failure with evidence; prior approach; root cause;
+options rejected; chosen fix and why; verification command/result; unresolved risk;
+and a proposed rule in condition → required action → exception form.
 ```
 
-This is Forge's central technique. The stages have different responsibilities and cannot be collapsed into one unconstrained LLM call.
+The prompt is research-oriented: retrieve local context first, distinguish observation from inference, cite proof, and label unknown facts instead of inventing them.
 
-## Extraction
+## Rule evolution
 
-The extractor receives source spans and returns zero to three pending decisions. It must cite every claim, avoid unstated rationale, assign low confidence to inference, and return no decision for mere brainstorming.
+| Signal | Effect |
+|---|---|
+| One cited failure/fix | Observation or candidate only. |
+| Repeated independently cited category | Candidate may become eligible for activation. |
+| Passing verification after applying a rule | Supporting evidence, not permanent proof. |
+| Revert, failing test, or contradicted review | Mark rule contradicted and require rollback/review. |
+| No relevant later evidence | `insufficient_data`; no confidence increase. |
 
-## Verification
-
-The verifier receives a decision plus later relevant evidence. It returns `consistent`, `contradicted`, or `insufficient_data`. Silence never counts as consistent. Coaching goals are evaluated deterministically from their metrics as `met`, `missed`, or `insufficient_data`.
-
-## Pattern scoring
-
-Initial patterns are fixed and measurable:
-
-- `large_commits`: three or more commits above a configured changed-lines threshold.
-- `repeated_review_theme`: the same classified review theme across three PRs.
-- `unverified_hotfixes`: two or more error/fix/revert or reopened-change sequences.
-
-A pattern is coachable only with at least three observations, sufficient citations, recent evidence, and an outcome/review-cost signal. Its priority is frequency × impact × confidence × recency.
-
-## Principle mapping and intervention
-
-| Pattern | Principle | Initial intervention | Example measurable goal |
-|---|---|---|---|
-| Large commits | Incremental development | Split work into reviewable commits. | Reduce median changed lines per commit below 250. |
-| Repeated review theme | Feedback-driven development | Add a pre-PR check for the repeated issue. | Reduce matching review comments by 50%. |
-| Unverified hotfixes | Hypothesis-driven debugging | Record a hypothesis and verification before editing. | Increase fixes with a linked test/reproduction to 80%. |
-
-After two missed cycles, Forge escalates the pattern for developer review instead of repeating the same recommendation.
+Autonomous mode uses this same evidence gate; it does not trust a model's confidence score by itself.

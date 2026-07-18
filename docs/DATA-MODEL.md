@@ -1,34 +1,32 @@
 # Data model
 
-Forge uses one local SQLite database per selected repository by default: `.forge/forge.sqlite3`.
+## Current store
 
-## Current local schema
+The existing local SQLite store contains repositories, immutable evidence/spans, decisions/citations, session handoffs/citations, work sessions, coordination state, GitHub polling state/events, reflections, intentions, and guardrail handoffs. It is migrated forward-only.
+
+## V1 target additions
 
 ```text
-repositories
-evidence_items -> evidence_spans
-decisions <-> decision_citations -> evidence_spans
-reflections -> evidence_spans
-intentions
-connector_state + connector_secrets
-approved_guardrails
+workspaces
+workspace_rule_policies
+session_outcomes -> evidence_spans
+decision_records -> session_outcomes
+rule_versions -> decision_records
+rule_evaluations -> rule_versions + evidence_spans
+rule_verifications -> rule_versions + evidence_spans
+rule_projections -> rule_versions
 ```
 
-| Entity | Responsibility | Rule |
+| Entity | Purpose | Constraint |
 |---|---|---|
-| `repositories` | Maps a workspace identifier to a local Git path, remote, branch, and last ingested commit. | Local Git is the default evidence source. |
-| `evidence_items` | Immutable commits, agent decisions, and reflections. | A Git commit is unique per workspace and commit hash. |
-| `evidence_spans` | Exact commit subject, diff hunk, or agent-supplied supporting text. | Derived decisions cite spans, not unstructured IDs. |
-| `decisions` | Pending, confirmed, or rejected developer-review items. | Only confirmed decisions are returned as memory. |
-| `decision_citations` | Relates decisions to one or more exact evidence spans. | Citations remain after rejection. |
-| `reflections` | Pending developer-review observations from an agent. | Confirmed reflections never become project memory. |
-| `intentions` | The one developer-chosen active intention per workspace. | One row per workspace. |
-| `connector_state` | Non-secret GitHub connector status and last polling result. | Status never contains credentials. |
-| `connector_secrets` | GitHub polling token encrypted with Windows DPAPI. | Values are never returned by the API or dashboard. |
-| `approved_guardrails` | Agent-recorded history of explicitly approved `AGENTS.md` diffs. | Forge never reads or writes `AGENTS.md`. |
+| `workspace_rule_policies` | One persisted `approval` or `autonomous` choice per workspace. | Exactly one active policy and auditable change history. |
+| `session_outcomes` | Agent-authored summary of its own session. | Bounded structured fields; never raw transcript. |
+| `decision_records` | Why a change was made, changed, removed, or fixed. | Cites source outcome and evidence. |
+| `rule_versions` | Scoped rule text plus lifecycle state. | Immutable versions; one active version per rule key/scope. |
+| `rule_evaluations` | Deterministic activation checks. | Stores threshold inputs and reason. |
+| `rule_verifications` | Later support, contradiction, or insufficient data. | Cites later evidence; silence is not stored as support. |
+| `rule_projections` | Hash-bound managed `AGENTS.md` projection history. | Records generated/applied content hash and rollback predecessor. |
 
-Confirmed memory is currently a read projection of confirmed decisions, keeping the first useful implementation small while preserving immutable evidence and review history.
+## Privacy and retention
 
-## Deferred schema
-
-`ingestion_events`, GitHub PR/review evidence, verification runs, pattern observations, versioned memory projections, and optional sync remain deferred until the local evidence loop needs them. Cloud accounts, raw chat transcripts, and automatic `AGENTS.md` edits are not part of the schema.
+No table stores GitHub tokens in telemetry, authorization headers, raw sensitive response bodies, or raw chat transcripts. Rule versions and decision provenance are retained for traceability; diagnostic GitHub sync events are bounded to 30 days and 500 records.

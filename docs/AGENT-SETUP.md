@@ -1,31 +1,23 @@
-# Agent setup
+# Codex and Antigravity setup
 
-Forge MCP is a local stdio process. It opens the same SQLite database used by `forge start`; it does not connect to ChatGPT, Codex, or Antigravity transcripts.
-
-## Prerequisite
-
-Install Forge, then start it once for the repository database:
+## Current installation
 
 ```powershell
-pipx install forge
+pip install -e .
 forge start --path C:\path\to\repository
 ```
 
-Set the database path to that repository's `.forge\forge.sqlite3` when configuring the MCP process. Do not put GitHub tokens in MCP configuration.
+Forge creates or opens `C:\path\to\repository\.forge\forge.sqlite3`. Configure both agents to use this same database.
 
-## Codex
-
-Add the local MCP server with Codex:
+### Codex
 
 ```powershell
 codex mcp add forge --env FORGE_DB_PATH="C:\path\to\repository\.forge\forge.sqlite3" -- forge-mcp
 ```
 
-The repository-local skill is at `.agents\skills\forge`. It retrieves confirmed cited context at session start and may create one pending, evidence-backed item at session end.
+### Antigravity
 
-## Antigravity
-
-Open **Manage MCP Servers** → **View raw config**, then add this entry to `~/.gemini/config/mcp_config.json`:
+Add this to `~/.gemini/config/mcp_config.json`:
 
 ```json
 {
@@ -40,8 +32,24 @@ Open **Manage MCP Servers** → **View raw config**, then add this entry to `~/.
 }
 ```
 
-Restart or refresh the MCP connection after saving. Antigravity uses the same local stdio MCP server and receives only tool inputs and outputs; Forge never reads Antigravity transcripts.
+Restart the MCP connection after saving.
+
+## How agents use Forge
+
+1. At session start, the agent reads repository instructions and calls Forge for relevant local context.
+2. The agent works normally; Forge never watches or extracts the private chat.
+3. At session end, **the same agent** summarises its own decisions, failures, prior approach, fix, validation, and unresolved work.
+4. The agent submits the compact structured outcome through MCP with evidence references.
+5. The next Codex or Antigravity session retrieves that shared memory.
+
+Codex does not summarise Antigravity. Antigravity does not summarise Codex. Both contribute to and read the same local Forge memory.
+
+## Policy modes: v1 target
+
+During `forge_initialize_workspace`, Forge asks once whether this workspace uses `approval` or `autonomous` rules. In approval mode, the agent shows the exact managed `AGENTS.md` diff before activation. In autonomous mode, Forge may update only its managed rule section after its evidence gate succeeds; every update is versioned and reversible.
+
+The current build has the review-first guardrail handoff flow. Do not configure agents to call the target tools until they are implemented.
 
 ## Offline behavior
 
-If the database does not exist, every MCP call reports that Forge is offline and asks the agent to continue without Forge context. It never creates an empty database from an incorrect configuration.
+If the local database is missing or Forge is stopped, MCP reports that it is offline. The agent continues without Forge context; it does not create a database in an unintended path or send data anywhere.

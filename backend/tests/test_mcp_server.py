@@ -25,6 +25,13 @@ class MCPServerTests(unittest.TestCase):
                 mcp_server.forge_get_project_context()
         self.assertFalse(missing_database.exists())
 
+    def test_offline_coordination_mcp_fails_without_creating_a_database(self):
+        missing_database = Path(self.temporary_directory.name) / "missing-coordination" / "forge.sqlite3"
+        with patch.dict(os.environ, {"FORGE_DB_PATH": str(missing_database)}):
+            with self.assertRaisesRegex(RuntimeError, "Forge is offline"):
+                mcp_server.forge_get_coordination_status()
+        self.assertFalse(missing_database.exists())
+
     def test_pending_mcp_decision_stores_only_explicit_input(self):
         quote = "The focused test failed at the changed boundary."
         with patch.dict(os.environ, {"FORGE_DB_PATH": str(self.database)}):
@@ -37,6 +44,17 @@ class MCPServerTests(unittest.TestCase):
             self.assertEqual(quote, store.get_decision(decision["id"])["evidence_quote"])
         finally:
             store.close()
+
+    def test_github_status_is_offline_safe_and_never_exposes_token(self):
+        store = Store(self.database)
+        store.register_repository("default", ".", "https://github.com/openai/forge.git", "main")
+        store.save_github_token("never-return-this-token")
+        store.record_github_poll_failure("default", "offline", "unreachable")
+        store.close()
+        with patch.dict(os.environ, {"FORGE_DB_PATH": str(self.database)}):
+            status = mcp_server.forge_get_github_sync_status()
+        self.assertEqual("unreachable", status["health"])
+        self.assertNotIn("never-return-this-token", str(status))
 
 
 if __name__ == "__main__":

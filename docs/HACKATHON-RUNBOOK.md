@@ -1,26 +1,14 @@
-# Hackathon demo runbook
+# Demo runbook
 
-This demo proves Forge's central promise: local Git evidence and an agent proposal become a pending decision, and only a developer can promote it to memory.
+## Demonstrate the current build
 
-## Run the demo
+1. Install and run Forge locally.
+2. Import local Git evidence and optionally poll a GitHub repository.
+3. Use MCP to retrieve context and submit one cited session handoff or pending decision.
+4. Show the dashboard evidence, decision status, and GitHub health.
 
-```bash
-pip install -e .
-pnpm --dir frontend build
-forge start --path .
-```
+## Demonstrate the new Forge design
 
-Open `http://127.0.0.1:8000`. Forge imports the repository's Git commits into the local SQLite file at `.forge/forge.sqlite3`.
+Use the architecture diagram to explain the planned loop: Codex and Antigravity each summarise their own session, Forge evaluates cited local evidence, and a per-workspace policy controls whether a rule waits for approval or can be autonomously projected with rollback.
 
-## Show the memory loop
-
-1. Through MCP, call `forge_record_decision` with an explicit statement and supporting quote.
-2. In Today, inspect the pending decision and its citation.
-3. Confirm it. The next `forge_get_project_context` returns it as cited confirmed memory.
-4. Set one active intention and show it in the same MCP context response.
-
-No account, webhook, API key, or raw transcript access is required. Rejected proposals remain visible with their immutable evidence and never enter memory.
-
-## Show the AGENTS.md boundary
-
-When `forge_get_agents_guardrail_candidates` returns a repeated confirmed item, the active agent must show an exact `AGENTS.md` diff in chat. Apply it only after the developer explicitly approves. Forge itself does not read or write `AGENTS.md`.
+Do not present autonomous projection or GPT-5.6 integration as shipped functionality until the target MCP tools and migrations are implemented.

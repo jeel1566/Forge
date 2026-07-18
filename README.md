@@ -1,52 +1,71 @@
 # Forge
 
-Forge is a local-first, evidence-backed memory layer for coding agents. It turns local Git evidence and voluntary agent observations into cited, reviewable decisions; only confirmed decisions become project memory.
+Forge is a local shared-memory system for coding agents. Codex and Antigravity summarise **their own** completed sessions, send short structured facts to Forge through MCP, and retrieve the same project context before later work.
 
-Forge is deliberately not a chat archive, personality profiler, or generic RAG store. When the evidence is insufficient, it says so.
+Forge is not a chat archive and does not silently read agent transcripts. Git, GitHub review data, test results, and agent-supplied summaries are evidence; Forge keeps the evidence local and makes the next agent's context traceable.
 
-## Status
+## New Forge: target architecture
 
-The current slice runs entirely on the developer machine: SQLite is stored in `.forge/forge.sqlite3`, the dashboard binds to `127.0.0.1`, and no cloud account or model API key is required. It imports local Git commits and diffs idempotently, keeps agent proposals pending, and projects only developer-confirmed decisions into memory.
+Forge v1 is moving from a review-only engineering notebook to an evidence-first learning loop. Each workspace chooses its rule policy once:
 
-GitHub credentials can be managed from the dashboard and are protected with the current Windows account. The dashboard can manually poll a repository's GitHub pull requests and reviews as immutable evidence; scheduled polling and public webhooks remain deferred.
+- **Approval mode** — Forge proposes a rule change; a developer approves it before it becomes active.
+- **Autonomous mode** — Forge activates only evidence-backed, scoped rules automatically, retains every version, and can roll back a rule when later evidence contradicts it.
 
-## Hackathon demo
+The choice is local to the workspace, visible in the dashboard, and can be changed deliberately. Autonomous mode does **not** mean unrestricted self-editing: Forge must never auto-merge, resolve conflicts, modify unrelated files, store raw transcripts, or create rules from an unsupported claim.
 
-The demo path is: import local Git evidence, submit a cited pending decision through MCP, edit or confirm it in Today, then retrieve the resulting cited memory in the next agent session.
+```mermaid
+flowchart LR
+  A[Codex or Antigravity] -->|reads project rules + context| M[Forge MCP]
+  A -->|self-written session summary| M
+  G[Git, tests, reviews, errors] --> E[Local evidence]
+  M <--> D[(Forge SQLite)]
+  E --> D
+  D --> L[Decision and learning lifecycle]
+  L --> R[Scoped AGENTS.md rules]
+  R --> A
+  D --> UI[Local dashboard]
+```
 
-```bash
+Read the full design in [the new architecture](docs/ARCHITECTURE.md) and [the seven-stage learning loop](docs/INGESTION-PIPELINE.md).
+
+## What works today
+
+The current code runs locally: SQLite, local Git ingestion, optional GitHub PR/review polling, a loopback dashboard/API, and an MCP server for Codex and Antigravity. It can persist cited session handoffs and pending/confirmed decisions. GitHub polling is opt-in, paginated, bounded, idempotent, and retains only safe local telemetry.
+
+The autonomous rule lifecycle, one-time policy selection, automatic rule projection, and richer failure-learning loop are the documented **v1 target**, not yet fully implemented in the current MCP/API schema. See [the implementation plan](docs/IMPLEMENTATION-PLAN.md) for the migration order.
+
+## Install and run the current local core
+
+```powershell
 pip install -e .
 pnpm --dir frontend build
 forge start --path .
 ```
 
-Open `http://127.0.0.1:8000`. Forge imports local Git commits when it starts, and Today can manually poll GitHub PR/review evidence when a token is configured. MCP can create pending decisions and reflections, but never confirms memory. Forge also never writes `AGENTS.md`: an active agent must present a cited diff and receive approval first.
+Open `http://127.0.0.1:8000`. Forge stores its database at `.forge/forge.sqlite3` in the selected repository.
 
-One local Forge runtime can register and switch among local Git repositories from Today. The startup path supplies the first repository and location of the local SQLite database; add other repositories with the dashboard rather than starting another port.
+Connect the same database to Codex or Antigravity using [agent setup](docs/AGENT-SETUP.md). The agent reads the repository instructions, retrieves Forge context, and submits its own structured end-of-session summary; Forge never extracts or uploads the raw conversation.
 
-Create a local backup or non-secret JSON export when needed:
+## GPT-5.6 and Codex
 
-```bash
-forge backup --path . --output forge-backup.sqlite3
-forge export --path . --output forge-export.json
-forge doctor --path .
-```
+Forge contains no LangChain, LlamaIndex, OpenAI API, or GPT-5.6 integration. If Codex is configured to use GPT-5.6, the model is the agent that writes the structured session summary and calls MCP; Forge treats it like any other agent and stores only the submitted summary and cited local evidence. See [model runtime boundaries](docs/MODEL-RUNTIME.md).
 
-## Non-negotiable rules
+## Safety rules
 
-1. Evidence is immutable and every derived claim links to exact evidence spans.
-2. Agent and model output is pending evidence, never current memory by default.
-3. No later evidence means `insufficient_data`, not confirmation.
-4. One active developer intention may exist per workspace.
+1. The local SQLite database is the source of truth; raw chat transcripts are never imported.
+2. Every learning links to concrete local evidence and includes a scope, outcome, and version history.
+3. A rule only applies to matching work; unsupported or contradicted rules are quarantined or rolled back.
+4. Forge never auto-merges, resolves conflicts, changes GitHub data, or exposes credentials.
+5. GitHub failure never prevents local Git, MCP, or the dashboard from working.
 
 ## Documentation
 
-- [Product and scope](docs/PRD.md)
-- [Runtime architecture](docs/ARCHITECTURE.md)
-- [System invariants and lifecycle](docs/SYSTEM-DESIGN.md)
-- [API and MCP contracts](docs/API-MCP-SPEC.md)
+- [Product requirements](docs/PRD.md)
+- [Architecture and diagram](docs/ARCHITECTURE.md)
+- [Seven-stage learning pipeline](docs/INGESTION-PIPELINE.md)
+- [MCP and API contract](docs/API-MCP-SPEC.md)
+- [Data model](docs/DATA-MODEL.md)
 - [Codex and Antigravity setup](docs/AGENT-SETUP.md)
-- [Data model and database constraints](docs/DATA-MODEL.md)
+- [Model runtime boundaries](docs/MODEL-RUNTIME.md)
 - [Implementation plan](docs/IMPLEMENTATION-PLAN.md)
 - [Local setup](docs/OPEN-SOURCE-SETUP.md)
-- [Hackathon demo runbook](docs/HACKATHON-RUNBOOK.md)
