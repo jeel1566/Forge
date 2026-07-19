@@ -32,7 +32,7 @@ def configured_validation(store: Store, workspace_id: str, validation_id: str) -
     return {"label": validation_id, "command": entry["argv"], "timeout_seconds": int(entry.get("timeout_seconds", 900)), "config_hash": digest, "scopes": entry.get("scopes", []), "categories": entry.get("categories", [])}
 
 
-def run_validation(store: Store, workspace_id: str, label: str, command: list[str], timeout_seconds: int = 900, trusted: bool = False, config_hash: str | None = None) -> dict:
+def run_validation(store: Store, workspace_id: str, label: str, command: list[str], timeout_seconds: int = 900, trusted: bool = False, config_hash: str | None = None, scopes: list[str] | None = None, categories: list[str] | None = None) -> dict:
     """Run one explicit local validation command and persist safe result metadata only."""
     repository = store.repository(workspace_id)
     if not repository:
@@ -56,9 +56,9 @@ def run_validation(store: Store, workspace_id: str, label: str, command: list[st
         status, exit_code = "unavailable", None
     duration_ms = round((monotonic() - started) * 1_000)
     command_digest = sha256("\0".join(command).encode("utf-8")).hexdigest()
-    return store.record_validation_result(workspace_id, label, status, exit_code, duration_ms, command[0], command_digest, trusted, config_hash)
+    return store.record_validation_result(workspace_id, label, status, exit_code, duration_ms, command[0], command_digest, trusted, config_hash, scopes, categories)
 
 
 def run_configured_validation(store: Store, workspace_id: str, validation_id: str) -> dict:
     configured = configured_validation(store, workspace_id, validation_id)
-    return run_validation(store, workspace_id, configured["label"], configured["command"], configured["timeout_seconds"], True, configured["config_hash"])
+    return run_validation(store, workspace_id, configured["label"], configured["command"], configured["timeout_seconds"], True, configured["config_hash"], configured["scopes"], configured["categories"])

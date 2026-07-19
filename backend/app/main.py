@@ -167,13 +167,28 @@ class RuleVerification(BaseModel):
     note: str = Field(min_length=1, max_length=4000)
 
 
+class VerificationInput(BaseModel):
+    source_kind: str = Field(pattern="^(configured_validation|git_change|github_review|local_failure)$")
+    result: str = Field(pattern="^(supported|contradicted|insufficient_data)$")
+    evidence_span_id: str = Field(min_length=1)
+    summary: str = Field(min_length=1, max_length=4000)
+    developer_confirmed: bool = False
+
+
+class LocalFailureInput(BaseModel):
+    failure_class: str = Field(pattern="^(test_failure|build_failure|runtime_failure|review_regression)$")
+    summary: str = Field(min_length=1, max_length=4000)
+    result: str = Field(default="contradicted", pattern="^(supported|contradicted|insufficient_data)$")
+    developer_confirmed: bool = False
+
+
 class LearningAlertReview(BaseModel):
     decision: str = Field(pattern="^(merged|kept_separate|marked_conflict|dismissed)$")
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "forge", "database": str(store.path)}
+    return {"status": "ok", "service": "forge", "database": str(store.path), "instance_id": os.environ.get("FORGE_RUNTIME_INSTANCE_ID")}
 
 
 @app.get("/v1/repositories")
@@ -232,9 +247,22 @@ def learning_cards(workspace_id: str, state: str | None = None):
     return store.learning_cards(workspace_id, state)
 
 
+@app.get("/v1/workspaces/{workspace_id}/learning-cards/{card_id}")
+def learning_card(workspace_id: str, card_id: str):
+    card = next((item for item in store.learning_cards_for_id(card_id) if item["workspace_id"] == workspace_id), None)
+    if not card:
+        raise HTTPException(404, "Learning Card not found")
+    return card
+
+
 @app.get("/v1/workspaces/{workspace_id}/learning-alerts")
 def learning_alerts(workspace_id: str):
     return store.learning_alerts(workspace_id)
+
+
+@app.get("/v1/workspaces/{workspace_id}/projection-status")
+def projection_status(workspace_id: str):
+    return store.projection_status(workspace_id)
 
 
 @app.post("/v1/learning-alerts/{alert_id}/review")
@@ -245,24 +273,42 @@ def review_learning_alert(alert_id: str, body: LearningAlertReview):
         raise HTTPException(422, str(error)) from error
 
 
-@app.post("/v1/workspaces/{workspace_id}/session-outcomes", status_code=201)
-def record_session_outcome(workspace_id: str, body: SessionOutcome):
+@app.get("/v1/workspaces/{workspace_id}/session-start-context")
+def session_start_context(workspace_id: str, scope: str | None = None):
+    return store.session_start_context(workspace_id, scope)
+
+
+@app.post("/v1/workspaces/{workspace_id}/handoffs", status_code=201)
+def record_session_handoff(workspace_id: str, body: SessionOutcome):
     try:
-        result = store.record_session_outcome(workspace_id, **body.model_dump())
+        result = store.record_session_handoff(workspace_id, **body.model_dump())
         rule = result.get("rule")
         if rule and rule.get("eligible") and store.rule_policy(workspace_id)["mode"] == "autonomous" and rule["state"] == "candidate":
             result["rule"] = store.activate_rule(rule["id"])
             result["activation"] = "autonomous"
-        elif rule and rule.get("eligible") and store.rule_policy(workspace_id)["mode"] == "approval":
+        elif rule and rule.get("eligible"):
             result["activation"] = "pending_developer_approval"
         return result
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
 
 
-@app.get("/v1/workspaces/{workspace_id}/session-outcomes")
-def session_outcomes(workspace_id: str, limit: int = 20):
+@app.get("/v1/workspaces/{workspace_id}/handoffs")
+def session_handoffs(workspace_id: str, limit: int = 20):
     return store.list_session_outcomes(workspace_id, limit)
+
+
+@app.get("/v1/handoffs/{handoff_id}")
+def session_handoff(handoff_id: str):
+    result = store.get_session_handoff(handoff_id)
+    if not result:
+        raise HTTPException(404, "Session Handoff not found")
+    return result
+
+
+@app.get("/v1/workspaces/{workspace_id}/legacy-history")
+def legacy_history(workspace_id: str, limit: int = 20):
+    return store.legacy_history(workspace_id, limit)
 
 
 @app.get("/v1/rules/{rule_version_id}/proposal")
@@ -285,6 +331,35 @@ def approve_rule(rule_version_id: str, body: RuleApproval):
 def verify_rule(rule_version_id: str, body: RuleVerification):
     try:
         return store.verify_rule(rule_version_id, **body.model_dump())
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.get("/v1/rules/{rule_version_id}/verification-inputs")
+def verification_inputs(rule_version_id: str):
+    return store.verification_inputs(rule_version_id)
+
+
+@app.post("/v1/rules/{rule_version_id}/verification-inputs", status_code=201)
+def record_verification_input(rule_version_id: str, body: VerificationInput):
+    try:
+        return store.record_verification_input(rule_version_id, **body.model_dump())
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.post("/v1/rules/{rule_version_id}/local-failures", status_code=201)
+def record_local_failure(rule_version_id: str, body: LocalFailureInput):
+    try:
+        return store.record_local_failure(rule_version_id, **body.model_dump())
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.post("/v1/verification-inputs/{input_id}/confirm")
+def confirm_verification_input(input_id: str):
+    try:
+        return store.confirm_verification_input(input_id)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
 
@@ -317,14 +392,6 @@ def history(workspace_id: str):
 @app.get("/v1/workspaces/{workspace_id}/session-contexts")
 def session_contexts(workspace_id: str, status: str | None = None, query: str | None = None, scope: str | None = None, file_path: str | None = None, include_archived: bool = False, limit: int = 100):
     return store.list_session_contexts(workspace_id, status=status, query_text=query, scope=scope, file_path=file_path, include_archived=include_archived, limit=max(1, min(limit, 100)))
-
-
-@app.post("/v1/workspaces/{workspace_id}/session-contexts", status_code=201)
-def create_structured_session_context(workspace_id: str, body: StructuredSessionHandoff):
-    try:
-        return store.create_structured_session_context(workspace_id, **body.model_dump())
-    except ValueError as error:
-        raise HTTPException(422, str(error)) from error
 
 
 @app.get("/v1/workspaces/{workspace_id}/decisions/retrieve")
@@ -372,30 +439,6 @@ def portable_guardrails(workspace_id: str):
 @app.get("/v1/workspaces/{workspace_id}/agents-guardrail-handoffs")
 def agents_guardrail_handoffs(workspace_id: str):
     return store.list_agents_guardrail_handoffs(workspace_id)
-
-
-@app.post("/v1/workspaces/{workspace_id}/agents-guardrail-handoffs", status_code=201)
-def prepare_agents_guardrail_handoff(workspace_id: str, body: AgentsGuardrailHandoff):
-    try:
-        return store.prepare_agents_guardrail_handoff(workspace_id, **body.model_dump())
-    except ValueError as error:
-        raise HTTPException(422, str(error)) from error
-
-
-@app.post("/v1/workspaces/{workspace_id}/portable-guardrails/{source_guardrail_id}/handoffs", status_code=201)
-def prepare_portable_guardrail_handoff(workspace_id: str, source_guardrail_id: str, body: AgentsGuardrailHandoff):
-    try:
-        return store.prepare_agents_guardrail_handoff(workspace_id, body.statement, body.current_agents_content, body.target_agents_path, source_guardrail_id)
-    except ValueError as error:
-        raise HTTPException(422, str(error)) from error
-
-
-@app.post("/v1/agents-guardrail-handoffs/{handoff_id}/complete")
-def complete_agents_guardrail_handoff(handoff_id: str, body: AgentsGuardrailCompletion):
-    try:
-        return store.complete_agents_guardrail_handoff(handoff_id, body.developer_approved, body.resulting_agents_content)
-    except ValueError as error:
-        raise HTTPException(422, str(error)) from error
 
 
 @app.get("/v1/connectors/github")
@@ -484,25 +527,6 @@ def review_reflection(reflection_id: str, body: ReflectionReview):
     if "error" in result:
         raise HTTPException(409, result["error"])
     return result
-
-
-@app.post("/v1/session-contexts/{session_id}/review")
-def review_session_context(session_id: str, body: SessionContextReview):
-    if body.status not in {"approved", "dismissed"}:
-        raise HTTPException(422, "status must be approved or dismissed")
-    result = store.review_session_context(session_id, body.status)
-    if not result:
-        raise HTTPException(404, "session context not found")
-    if "error" in result:
-        raise HTTPException(409, result["error"])
-    return result
-
-
-@app.post("/v1/session-contexts/{session_id}/archive")
-def archive_session_context(session_id: str):
-    if not store.archive_session_context(session_id):
-        raise HTTPException(404, "approved session context not found")
-    return {"archived": True}
 
 
 @app.post("/v1/memory/{entry_id}/archive")

@@ -55,7 +55,7 @@ class MemoryProjectionTests(unittest.TestCase):
         evidence = store.list_evidence("default")[0]
         self.assertEqual(2, len(store.get_evidence(evidence["id"])["spans"]))
         self.assertEqual(1, store.evidence_count("default", "git_commit"))
-        self.assertEqual(20, store.db.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()["version"])
+        self.assertEqual(23, store.db.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()["version"])
         self.assertTrue(store.integrity_check()["ok"])
 
     def test_concurrent_evidence_reads_are_serialized(self):

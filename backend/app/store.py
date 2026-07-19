@@ -288,6 +288,55 @@ class Store:
                 created_at TEXT NOT NULL, resolved_at TEXT, UNIQUE(card_id, related_card_id, kind)
             );
             CREATE INDEX IF NOT EXISTS learning_cards_workspace_index ON learning_cards(workspace_id, state, review_due_at);
+            """), (21, """
+            CREATE TABLE IF NOT EXISTS validation_runs (
+                id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES repositories(workspace_id),
+                evidence_span_id TEXT NOT NULL UNIQUE REFERENCES evidence_spans(id), validation_id TEXT NOT NULL,
+                trusted INTEGER NOT NULL, config_hash TEXT, command_digest TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('passed', 'failed', 'timed_out', 'unavailable')),
+                duration_ms INTEGER NOT NULL, scopes_json TEXT NOT NULL, categories_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS validation_runs_workspace_index ON validation_runs(workspace_id, trusted, status, created_at DESC);
+            CREATE TABLE IF NOT EXISTS learning_card_reviews (
+                id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES repositories(workspace_id),
+                card_id TEXT NOT NULL REFERENCES learning_cards(id), related_card_id TEXT REFERENCES learning_cards(id),
+                decision TEXT NOT NULL CHECK(decision IN ('merged', 'kept_separate', 'marked_conflict')),
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS rule_projections (
+                id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES repositories(workspace_id),
+                rule_version_id TEXT REFERENCES rule_versions(id), operation TEXT NOT NULL CHECK(operation IN ('activate', 'retract')),
+                status TEXT NOT NULL CHECK(status IN ('prepared', 'applied', 'failed', 'reverted')),
+                target_path TEXT NOT NULL, expected_block_hash TEXT, resulting_block_hash TEXT,
+                detail TEXT, created_at TEXT NOT NULL, completed_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS projection_alerts (
+                id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES repositories(workspace_id),
+                rule_version_id TEXT REFERENCES rule_versions(id), status TEXT NOT NULL CHECK(status IN ('pending', 'resolved')),
+                detail TEXT NOT NULL, created_at TEXT NOT NULL, resolved_at TEXT
+            );
+            ALTER TABLE rule_versions ADD COLUMN learning_card_id TEXT REFERENCES learning_cards(id);
+            ALTER TABLE rule_versions ADD COLUMN legacy INTEGER NOT NULL DEFAULT 0;
+            CREATE INDEX IF NOT EXISTS rule_versions_card_index ON rule_versions(learning_card_id, created_at DESC);
+            """), (22, """
+            CREATE TABLE IF NOT EXISTS session_end_events (
+                id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES repositories(workspace_id),
+                agent TEXT NOT NULL, event_type TEXT NOT NULL CHECK(event_type IN ('completed', 'abandoned')),
+                handoff_id TEXT REFERENCES session_outcomes(id), abandon_reason TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS session_end_events_workspace_index ON session_end_events(workspace_id, agent, created_at DESC);
+            """), (23, """
+            CREATE TABLE IF NOT EXISTS verification_inputs (
+                id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES repositories(workspace_id),
+                rule_version_id TEXT NOT NULL REFERENCES rule_versions(id), source_kind TEXT NOT NULL CHECK(source_kind IN ('configured_validation', 'git_change', 'github_review', 'local_failure')),
+                evidence_span_id TEXT NOT NULL REFERENCES evidence_spans(id), result TEXT NOT NULL CHECK(result IN ('supported', 'contradicted', 'insufficient_data')),
+                summary TEXT NOT NULL, developer_confirmed INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL, applied_at TEXT,
+                UNIQUE(rule_version_id, source_kind, evidence_span_id, result)
+            );
+            CREATE INDEX IF NOT EXISTS verification_inputs_rule_index ON verification_inputs(rule_version_id, created_at DESC);
             """)]
         for version, migration in migrations:
             if version not in applied:
@@ -295,6 +344,8 @@ class Store:
                 self.db.execute("INSERT INTO schema_migrations VALUES (?, ?)", (version, now()))
         self.db.commit()
         self._backfill_learning_cards()
+        self._backfill_learning_card_links()
+        self._reconcile_projections()
 
     def _backfill_learning_cards(self):
         rows = self.db.execute("SELECT id, workspace_id, rule_key, scope_json, learning_area, learning_trigger, learning_action, state, created_at, activated_at FROM rule_versions").fetchall()
@@ -302,6 +353,26 @@ class Store:
             card_state = {"candidate": "watching", "active": "active", "retracted": "retracted"}[row["state"]]
             due = (datetime.fromisoformat(row["activated_at"]) + timedelta(days=90)).isoformat() if row["activated_at"] else None
             self.db.execute("INSERT OR IGNORE INTO learning_cards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (str(uuid4()), row["workspace_id"], row["rule_key"], row["scope_json"], row["learning_area"], row["learning_trigger"], row["learning_action"], card_state, row["id"], due, row["created_at"], now()))
+        self.db.commit()
+
+    def _backfill_learning_card_links(self):
+        rows = self.db.execute("SELECT id, workspace_id, rule_key FROM rule_versions WHERE learning_card_id IS NULL").fetchall()
+        for row in rows:
+            card = self.db.execute("SELECT id FROM learning_cards WHERE workspace_id=? AND rule_key=?", (row["workspace_id"], row["rule_key"])).fetchone()
+            if card:
+                self.db.execute("UPDATE rule_versions SET learning_card_id=?, legacy=1 WHERE id=?", (card["id"], row["id"]))
+        self.db.commit()
+
+    def _reconcile_projections(self):
+        rows = self.db.execute("SELECT * FROM rule_projections WHERE status='prepared'").fetchall()
+        for row in rows:
+            path = Path(row["target_path"])
+            current = path.read_text(encoding="utf-8") if path.exists() else ""
+            block_hash = self._managed_block_hash(current)
+            if block_hash == row["resulting_block_hash"]:
+                self.db.execute("UPDATE rule_projections SET status='applied', completed_at=? WHERE id=?", (now(), row["id"]))
+            else:
+                self.db.execute("UPDATE rule_projections SET status='failed', detail=?, completed_at=? WHERE id=?", ("Projection recovery could not verify the managed block.", now(), row["id"]))
         self.db.commit()
 
     def close(self):
@@ -327,7 +398,7 @@ class Store:
         target = Path(path)
         if target.exists():
             raise FileExistsError(f"Export already exists: {target}")
-        tables = ("repositories", "evidence_items", "evidence_spans", "decisions", "decision_citations", "decision_scopes", "reflections", "intentions", "project_memory_entries", "session_contexts", "session_context_citations", "session_context_files", "session_context_scopes", "agent_work_sessions", "worktrees", "connector_state", "github_poll_settings", "agents_guardrail_handoffs", "workspace_rule_policies", "session_outcomes", "session_outcome_citations", "rule_versions", "rule_version_citations", "rule_verifications")
+        tables = ("repositories", "evidence_items", "evidence_spans", "decisions", "decision_citations", "decision_scopes", "reflections", "intentions", "project_memory_entries", "session_contexts", "session_context_citations", "session_context_files", "session_context_scopes", "agent_work_sessions", "worktrees", "connector_state", "github_poll_settings", "agents_guardrail_handoffs", "workspace_rule_policies", "session_outcomes", "session_outcome_citations", "session_end_events", "validation_runs", "learning_cards", "learning_card_observations", "learning_card_alerts", "learning_card_reviews", "rule_versions", "rule_version_citations", "rule_verifications", "verification_inputs", "rule_projections", "projection_alerts")
         data = {table: [dict(row) for row in self.db.execute(f"SELECT * FROM {table}")] for table in tables}
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -405,7 +476,7 @@ class Store:
             self.db.commit()
             return span_id
 
-    def record_validation_result(self, workspace_id: str, label: str, status: str, exit_code: int | None, duration_ms: int, command_name: str, command_digest: str, trusted: bool = False, config_hash: str | None = None):
+    def record_validation_result(self, workspace_id: str, label: str, status: str, exit_code: int | None, duration_ms: int, command_name: str, command_digest: str, trusted: bool = False, config_hash: str | None = None, scopes: list[str] | None = None, categories: list[str] | None = None):
         if status not in {"passed", "failed", "timed_out", "unavailable"}:
             raise ValueError("Unsupported validation status.")
         if not self.repository(workspace_id):
@@ -421,7 +492,12 @@ class Store:
             workspace_id, "local_validation", title, quote, quote, run_id,
             {"captured_by": "forge", "trusted": trusted, "config_hash": config_hash, "status": status, "exit_code": exit_code, "duration_ms": duration_ms, "command_name": command_name, "command_digest": command_digest},
         )
-        return {"span_id": span_id, "label": label, "status": status, "exit_code": exit_code, "duration_ms": duration_ms}
+        self.db.execute(
+            "INSERT INTO validation_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (run_id, workspace_id, span_id, label, int(trusted), config_hash, command_digest, status, duration_ms, json.dumps(sorted(set(scopes or []))), json.dumps(sorted(set(categories or []))), now()),
+        )
+        self.db.commit()
+        return {"span_id": span_id, "validation_run_id": run_id, "label": label, "status": status, "exit_code": exit_code, "duration_ms": duration_ms, "trusted": trusted}
 
     def has_evidence(self, workspace_id: str, kind: str, external_id: str) -> bool:
         return bool(self.db.execute("SELECT 1 FROM evidence_items WHERE workspace_id=? AND kind=? AND external_id=?", (workspace_id, kind, external_id)).fetchone())
@@ -998,30 +1074,59 @@ class Store:
             raise ValueError(f"{field} must be at most {maximum} characters.")
         return normalized
 
+    def _normalized_scope(self, scope: list[str]) -> list[str]:
+        return sorted({item.strip().replace("\\", "/").strip("/").lower() for item in scope if item and item.strip()})
+
     def _rule_key(self, scope: list[str], category: str, statement: str, learning_area: str | None = None, learning_trigger: str | None = None, learning_action: str | None = None) -> str:
-        normalized_scope = sorted({item.strip() for item in scope if item.strip()})
+        normalized_scope = self._normalized_scope(scope)
         if learning_area and learning_trigger and learning_action:
             value = ["learning-card", normalized_scope, learning_area.strip().lower(), learning_trigger.strip().lower(), learning_action.strip().lower()]
         else:
             value = ["legacy-rule", normalized_scope, category.strip().lower(), statement.strip().lower()]
         return sha256(json.dumps(value, separators=(",", ":")).encode("utf-8")).hexdigest()
 
-    def _rule_outcome_count(self, workspace_id: str, rule_key: str) -> int:
-        rows = self.db.execute("SELECT id, scope_json, category, proposed_rule, validation, learning_area, learning_trigger, learning_action FROM session_outcomes WHERE workspace_id=?", (workspace_id,)).fetchall()
-        matching_ids = [
-            row["id"] for row in rows
-            if self._rule_key(json.loads(row["scope_json"]), row["category"], row["proposed_rule"], row["learning_area"], row["learning_trigger"], row["learning_action"]) == rule_key
-            and row["proposed_rule"] != "none"
-            and row["validation"].strip().lower() not in {"unknown", "not_run"}
-        ]
-        if not matching_ids:
-            return 0
-        placeholders = ",".join("?" for _ in matching_ids)
+    def _current_validation_config_hash(self, workspace_id: str) -> str | None:
+        repository = self.repository(workspace_id)
+        if not repository:
+            return None
+        path = Path(repository["path"]) / "forge.validation.json"
+        return sha256(path.read_bytes()).hexdigest() if path.exists() else None
+
+    @staticmethod
+    def _scope_is_covered(scope: str, allowed_scopes: list[str]) -> bool:
+        normalized = scope.strip().replace("\\", "/").strip("/").lower()
+        return "repository" in allowed_scopes or any(normalized == allowed or normalized.startswith(f"{allowed}/") for allowed in allowed_scopes)
+
+    def _applicable_validation_runs(self, outcome_id: str, scope: list[str], category: str) -> list[dict]:
+        config_hash = self._current_validation_config_hash(self.db.execute("SELECT workspace_id FROM session_outcomes WHERE id=?", (outcome_id,)).fetchone()["workspace_id"])
         rows = self.db.execute(
-            f"SELECT DISTINCT c.span_id, e.metadata FROM session_outcome_citations c JOIN evidence_spans s ON s.id=c.span_id JOIN evidence_items e ON e.id=s.evidence_id WHERE c.session_outcome_id IN ({placeholders}) AND e.kind='local_validation'",
-            matching_ids,
+            "SELECT v.* FROM validation_runs v JOIN learning_card_observations o ON o.span_id=v.evidence_span_id WHERE o.outcome_id=?",
+            (outcome_id,),
         ).fetchall()
-        return sum(1 for row in rows if json.loads(row["metadata"] or "{}").get("trusted") is True)
+        trusted = [dict(row) for row in rows if row["trusted"] and row["status"] == "passed" and row["config_hash"] and row["config_hash"] == config_hash and category.strip().lower() in json.loads(row["categories_json"])]
+        return trusted if trusted and all(any(self._scope_is_covered(item, json.loads(run["scopes_json"])) for run in trusted) for item in self._normalized_scope(scope)) else []
+
+    def _outcome_has_applicable_validation(self, outcome_id: str, scope: list[str], category: str) -> bool:
+        return bool(self._applicable_validation_runs(outcome_id, scope, category))
+
+    def _rule_outcome_count(self, workspace_id: str, rule_key: str) -> int:
+        card = self.db.execute("SELECT * FROM learning_cards WHERE workspace_id=? AND rule_key=?", (workspace_id, rule_key)).fetchone()
+        if not card:
+            return 0
+        rows = self.db.execute("SELECT DISTINCT o.outcome_id, s.created_at FROM learning_card_observations o JOIN session_outcomes s ON s.id=o.outcome_id WHERE o.card_id=? ORDER BY s.created_at", (card["id"],)).fetchall()
+        scope = json.loads(card["scope_json"])
+        category = self.db.execute("SELECT category FROM rule_versions WHERE learning_card_id=? ORDER BY created_at DESC LIMIT 1", (card["id"],)).fetchone()
+        if not category:
+            return 0
+        used_spans: set[str] = set()
+        count = 0
+        for row in rows:
+            runs = self._applicable_validation_runs(row["outcome_id"], scope, category["category"])
+            spans = {run["evidence_span_id"] for run in runs}
+            if spans - used_spans:
+                count += 1
+                used_spans.update(spans)
+        return count
 
     def _rule_version(self, rule_version_id: str):
         row = self.db.execute("SELECT * FROM rule_versions WHERE id=?", (rule_version_id,)).fetchone()
@@ -1052,7 +1157,7 @@ class Store:
         return rule
 
     def _card_for_rule(self, rule_version_id: str):
-        row = self.db.execute("SELECT * FROM learning_cards WHERE rule_version_id=?", (rule_version_id,)).fetchone()
+        row = self.db.execute("SELECT c.* FROM learning_cards c JOIN rule_versions r ON r.learning_card_id=c.id WHERE r.id=?", (rule_version_id,)).fetchone()
         return dict(row) if row else None
 
     def _ensure_learning_card(self, rule: dict, outcome_id: str, span_ids: list[str]):
@@ -1060,7 +1165,8 @@ class Store:
         if not card:
             card_id = str(uuid4())
             card_state = {"candidate": "watching", "active": "active", "retracted": "retracted"}[rule["state"]]
-            self.db.execute("INSERT INTO learning_cards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (card_id, rule["workspace_id"], rule["rule_key"], json.dumps(rule["scope"]), rule.get("learning_area"), rule.get("learning_trigger"), rule.get("learning_action"), card_state, rule["id"], None, now(), now()))
+            self.db.execute("INSERT INTO learning_cards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (card_id, rule["workspace_id"], rule["rule_key"], json.dumps(self._normalized_scope(rule["scope"])), rule.get("learning_area"), rule.get("learning_trigger"), rule.get("learning_action"), "observed", rule["id"], None, now(), now()))
+            self.db.execute("UPDATE rule_versions SET learning_card_id=? WHERE id=?", (card_id, rule["id"]))
             card = dict(self.db.execute("SELECT * FROM learning_cards WHERE id=?", (card_id,)).fetchone())
             others = self.db.execute("SELECT * FROM learning_cards WHERE workspace_id=? AND id<>?", (rule["workspace_id"], card_id)).fetchall()
             for other in others:
@@ -1071,7 +1177,8 @@ class Store:
                     self.db.execute("INSERT OR IGNORE INTO learning_card_alerts VALUES (?, ?, ?, ?, ?, 'pending', ?, NULL)", (str(uuid4()), rule["workspace_id"], card_id, other["id"], kind, now()))
         self.db.executemany("INSERT OR IGNORE INTO learning_card_observations VALUES (?, ?, ?, ?)", [(card["id"], outcome_id, span_id, now()) for span_id in span_ids])
         supported = self._rule_outcome_count(rule["workspace_id"], rule["rule_key"])
-        self.db.execute("UPDATE learning_cards SET state=?, updated_at=? WHERE id=?", ("ready" if supported >= 2 else "watching", now(), card["id"]))
+        state = "ready" if supported >= 2 else "watching" if supported else "observed"
+        self.db.execute("UPDATE learning_cards SET state=?, updated_at=? WHERE id=?", (state, now(), card["id"]))
         return card
 
     def learning_cards(self, workspace_id: str, state: str | None = None):
@@ -1083,33 +1190,74 @@ class Store:
         for row in self.db.execute(query + " ORDER BY updated_at DESC", params).fetchall():
             card = dict(row)
             card["scope"] = json.loads(card.pop("scope_json"))
-            card["alerts"] = [dict(alert) for alert in self.db.execute("SELECT * FROM learning_card_alerts WHERE card_id=? AND status='pending'", (card["id"],)).fetchall()]
-            card["observations"] = [dict(item) for item in self.db.execute("SELECT outcome_id, span_id, created_at FROM learning_card_observations WHERE card_id=? ORDER BY created_at", (card["id"],)).fetchall()]
+            card["alerts"] = [dict(alert) for alert in self.db.execute("SELECT * FROM learning_card_alerts WHERE (card_id=? OR related_card_id=?) AND status='pending'", (card["id"], card["id"])).fetchall()]
+            card["observations"] = [dict(item) for item in self.db.execute(
+                "SELECT o.outcome_id, o.span_id, o.created_at, h.agent, h.goal, h.validation, s.quote AS citation_quote "
+                "FROM learning_card_observations o JOIN session_outcomes h ON h.id=o.outcome_id "
+                "JOIN evidence_spans s ON s.id=o.span_id WHERE o.card_id=? ORDER BY o.created_at",
+                (card["id"],),
+            ).fetchall()]
+            card["rule_versions"] = [dict(item) for item in self.db.execute("SELECT id, statement, state, created_at, activated_at, retracted_at FROM rule_versions WHERE learning_card_id=? ORDER BY created_at", (card["id"],)).fetchall()]
+            card["verification_inputs"] = [self._verification_input(item["id"]) for item in self.db.execute(
+                "SELECT id FROM verification_inputs WHERE rule_version_id IN (SELECT id FROM rule_versions WHERE learning_card_id=?) ORDER BY created_at",
+                (card["id"],),
+            ).fetchall()]
             cards.append(card)
         return cards
+
+    def learning_cards_for_id(self, card_id: str):
+        row = self.db.execute("SELECT workspace_id FROM learning_cards WHERE id=?", (card_id,)).fetchone()
+        if not row:
+            return []
+        return [card for card in self.learning_cards(row["workspace_id"]) if card["id"] == card_id]
 
     def learning_alerts(self, workspace_id: str):
         alerts = [dict(row) for row in self.db.execute("SELECT * FROM learning_card_alerts WHERE workspace_id=? AND status='pending' ORDER BY created_at", (workspace_id,)).fetchall()]
         for card in self.db.execute("SELECT id, review_due_at FROM learning_cards WHERE workspace_id=? AND state IN ('active', 'verified') AND review_due_at IS NOT NULL AND review_due_at<?", (workspace_id, now())).fetchall():
             alerts.append({"id": f"review_due:{card['id']}", "card_id": card["id"], "related_card_id": None, "kind": "review_due", "status": "pending", "created_at": card["review_due_at"]})
+        alerts.extend({"id": row["id"], "card_id": None, "related_card_id": None, "kind": "projection_repair", "status": row["status"], "created_at": row["created_at"], "detail": row["detail"]} for row in self.db.execute("SELECT * FROM projection_alerts WHERE workspace_id=? AND status='pending' ORDER BY created_at", (workspace_id,)).fetchall())
         return alerts
+
+    def projection_status(self, workspace_id: str):
+        projections = [dict(row) for row in self.db.execute(
+            "SELECT id, rule_version_id, operation, status, target_path, detail, created_at, completed_at FROM rule_projections WHERE workspace_id=? ORDER BY created_at DESC LIMIT 20",
+            (workspace_id,),
+        ).fetchall()]
+        repairs = [dict(row) for row in self.db.execute(
+            "SELECT id, rule_version_id, status, detail, created_at FROM projection_alerts WHERE workspace_id=? AND status='pending' ORDER BY created_at DESC",
+            (workspace_id,),
+        ).fetchall()]
+        return {"workspace_id": workspace_id, "projections": projections, "repair_alerts": repairs}
+
+    def legacy_history(self, workspace_id: str, limit: int = 20):
+        contexts = self.db.execute("SELECT id, agent, worktree_path, branch, what_changed, validation, unresolved, created_at FROM session_contexts WHERE workspace_id=? ORDER BY created_at DESC LIMIT ?", (workspace_id, max(1, min(limit, 100)))).fetchall()
+        rules = self.db.execute("SELECT id, statement, state, created_at FROM rule_versions WHERE workspace_id=? AND legacy=1 ORDER BY created_at DESC LIMIT ?", (workspace_id, max(1, min(limit, 100)))).fetchall()
+        return {"workspace_id": workspace_id, "read_only": True, "session_contexts": [dict(row) for row in contexts], "rule_versions": [dict(row) for row in rules]}
 
     def cleanup_unreferenced_validation_evidence(self, workspace_id: str, older_than_days: int = 90):
         cutoff = (datetime.now(UTC) - timedelta(days=older_than_days)).isoformat()
         rows = self.db.execute("SELECT e.id FROM evidence_items e WHERE e.workspace_id=? AND e.kind='local_validation' AND e.created_at<? AND NOT EXISTS (SELECT 1 FROM session_outcome_citations c JOIN evidence_spans s ON s.id=c.span_id WHERE s.evidence_id=e.id) AND NOT EXISTS (SELECT 1 FROM rule_verifications v JOIN evidence_spans s ON s.id=v.evidence_span_id WHERE s.evidence_id=e.id)", (workspace_id, cutoff)).fetchall()
-        self.db.executemany("DELETE FROM evidence_items WHERE id=?", [(row["id"],) for row in rows])
+        evidence_ids = [(row["id"],) for row in rows]
+        if evidence_ids:
+            self.db.executemany("DELETE FROM validation_runs WHERE evidence_span_id IN (SELECT id FROM evidence_spans WHERE evidence_id=?)", evidence_ids)
+            self.db.executemany("DELETE FROM evidence_spans WHERE evidence_id=?", evidence_ids)
+            self.db.executemany("DELETE FROM evidence_items WHERE id=?", evidence_ids)
         self.db.commit()
         return {"deleted": len(rows)}
 
     def review_learning_alert(self, alert_id: str, decision: str):
-        if decision not in {"merged", "kept_separate", "marked_conflict", "dismissed"}:
+        if decision not in {"merged", "kept_separate", "marked_conflict"}:
             raise ValueError("Unsupported Learning Card review decision.")
         alert = self.db.execute("SELECT * FROM learning_card_alerts WHERE id=? AND status='pending'", (alert_id,)).fetchone()
         if not alert:
             raise ValueError("Pending Learning Card alert not found.")
         if decision == "merged" and alert["related_card_id"]:
+            states = self.db.execute("SELECT id, state FROM learning_cards WHERE id IN (?, ?)", (alert["card_id"], alert["related_card_id"])).fetchall()
+            if any(row["state"] in {"active", "verified", "contradicted", "retracted"} for row in states):
+                raise ValueError("Only inactive Learning Cards can be merged.")
             self.db.execute("INSERT OR IGNORE INTO learning_card_observations SELECT ?, outcome_id, span_id, created_at FROM learning_card_observations WHERE card_id=?", (alert["card_id"], alert["related_card_id"]))
             self.db.execute("UPDATE learning_cards SET state='archived', updated_at=? WHERE id=?", (now(), alert["related_card_id"]))
+        self.db.execute("INSERT INTO learning_card_reviews VALUES (?, ?, ?, ?, ?, ?)", (str(uuid4()), alert["workspace_id"], alert["card_id"], alert["related_card_id"], decision, now()))
         self.db.execute("UPDATE learning_card_alerts SET status=?, resolved_at=? WHERE id=?", (decision, now(), alert_id))
         self.db.commit()
         return {"id": alert_id, "decision": decision}
@@ -1147,11 +1295,12 @@ class Store:
         if any(card_fields.values()) and not all(card_fields.values()):
             raise ValueError("learning_area, learning_trigger, and learning_action are required together.")
         if learning_card_id:
-            existing_card = self._rule_version(learning_card_id)
-            if not existing_card or existing_card["workspace_id"] != workspace_id or existing_card["state"] not in {"candidate", "active"}:
+            existing_card = self.db.execute("SELECT * FROM learning_cards WHERE id=? AND workspace_id=?", (learning_card_id, workspace_id)).fetchone()
+            if not existing_card or existing_card["state"] in {"archived", "retracted"}:
                 raise ValueError("Learning Card is not available in this workspace.")
+            existing_card = dict(existing_card)
             rule_key = existing_card["rule_key"]
-            card_fields = {key: existing_card[key] for key in card_fields}
+            card_fields = {"learning_area": existing_card["area"], "learning_trigger": existing_card["trigger"], "learning_action": existing_card["action"]}
         else:
             rule_key = self._rule_key(scope, fields["category"], fields["proposed_rule"], **card_fields)
         existing = self.db.execute("SELECT id FROM session_outcomes WHERE workspace_id=? AND outcome_key=?", (workspace_id, fields["outcome_key"])).fetchone()
@@ -1172,7 +1321,7 @@ class Store:
             else:
                 rule_id = str(uuid4())
                 policy = self.rule_policy(workspace_id)["mode"] or "approval"
-                self.db.execute("INSERT INTO rule_versions (id, workspace_id, rule_key, version, statement, scope_json, category, state, activation_mode, source_outcome_id, previous_version_id, evaluation_reason, created_at, activated_at, retracted_at, projection_hash, learning_area, learning_trigger, learning_action) VALUES (?, ?, ?, 1, ?, ?, ?, 'candidate', ?, ?, NULL, ?, ?, NULL, NULL, NULL, ?, ?, ?)", (rule_id, workspace_id, rule_key, fields["proposed_rule"], json.dumps(sorted(set(scope))), fields["category"], policy, outcome_id, "Waiting for two independently cited Forge validation results.", now(), card_fields["learning_area"], card_fields["learning_trigger"], card_fields["learning_action"]))
+                self.db.execute("INSERT INTO rule_versions (id, workspace_id, rule_key, version, statement, scope_json, category, state, activation_mode, source_outcome_id, previous_version_id, evaluation_reason, created_at, activated_at, retracted_at, projection_hash, learning_area, learning_trigger, learning_action) VALUES (?, ?, ?, 1, ?, ?, ?, 'candidate', ?, ?, NULL, ?, ?, NULL, NULL, NULL, ?, ?, ?)", (rule_id, workspace_id, rule_key, fields["proposed_rule"], json.dumps(self._normalized_scope(scope)), fields["category"], policy, outcome_id, "Waiting for two independently cited configured validation-backed handoffs.", now(), card_fields["learning_area"], card_fields["learning_trigger"], card_fields["learning_action"]))
                 self.db.executemany("INSERT INTO rule_version_citations VALUES (?, ?)", [(rule_id, span_id) for span_id in span_ids])
                 rule = self._rule_version(rule_id)
         self.db.commit()
@@ -1200,6 +1349,48 @@ class Store:
         rows = self.db.execute("SELECT id FROM session_outcomes WHERE workspace_id=? ORDER BY created_at DESC LIMIT ?", (workspace_id, max(1, min(limit, 100)))).fetchall()
         return [self.get_session_outcome(row["id"]) for row in rows]
 
+    def record_session_handoff(self, workspace_id: str, *args, **kwargs):
+        proposed_rule = kwargs.get("proposed_rule", args[16] if len(args) > 16 else "none")
+        learning_card_id = kwargs.get("learning_card_id", args[18] if len(args) > 18 else None)
+        fields = (
+            kwargs.get("learning_area", args[19] if len(args) > 19 else None),
+            kwargs.get("learning_trigger", args[20] if len(args) > 20 else None),
+            kwargs.get("learning_action", args[21] if len(args) > 21 else None),
+        )
+        if proposed_rule.strip().lower() != "none" and not learning_card_id:
+            if not all(fields):
+                raise ValueError("Rule-supporting Session Handoffs require scope, learning_area, learning_trigger, and learning_action.")
+        return self.record_session_outcome(workspace_id, *args, **kwargs)
+
+    def record_session_end_event(self, workspace_id: str, agent: str, event_type: str, handoff_id: str | None = None, abandon_reason: str | None = None):
+        if event_type not in {"completed", "abandoned"}:
+            raise ValueError("session end event type is invalid.")
+        if event_type == "completed" and not handoff_id:
+            raise ValueError("completed sessions require a Session Handoff.")
+        self.db.execute(
+            "INSERT INTO session_end_events VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (str(uuid4()), workspace_id, self._outcome_text(agent, "agent", 100), event_type, handoff_id, abandon_reason, now()),
+        )
+        self.db.commit()
+
+    def get_session_handoff(self, handoff_id: str):
+        return self.get_session_outcome(handoff_id)
+
+    def get_latest_session_handoff(self, workspace_id: str):
+        rows = self.list_session_outcomes(workspace_id, 1)
+        return rows[0] if rows else {"workspace_id": workspace_id, "status": "no_handoff"}
+
+    def session_start_context(self, workspace_id: str, scope: str | None = None):
+        learning = self.learning_context(workspace_id, scope)
+        return {
+            "workspace_id": workspace_id,
+            "policy": learning["policy"],
+            "active_rules": learning["active_rules"],
+            "learning_alerts": learning["learning_alerts"],
+            "latest_handoff": self.get_latest_session_handoff(workspace_id),
+            "decisions": self.retrieve_decisions(workspace_id, scope=scope, limit=10),
+        }
+
     def _workspace_agents_path(self, workspace_id: str) -> Path:
         repository = self.repository(workspace_id)
         if not repository:
@@ -1212,6 +1403,16 @@ class Store:
         lines.extend(["", "<!-- forge:rules:end -->", ""])
         return "\n".join(lines)
 
+    @staticmethod
+    def _managed_block_hash(content: str) -> str | None:
+        start, end = "<!-- forge:rules:start -->", "<!-- forge:rules:end -->"
+        if (start in content) != (end in content):
+            return None
+        if start not in content:
+            return ""
+        block = start + content.split(start, 1)[1].split(end, 1)[0] + end
+        return sha256(block.encode("utf-8")).hexdigest()
+
     def _replace_managed_rules(self, current: str, block: str) -> str:
         start, end = "<!-- forge:rules:start -->", "<!-- forge:rules:end -->"
         has_start, has_end = start in current, end in current
@@ -1223,16 +1424,39 @@ class Store:
             return before.rstrip() + "\n\n" + block + after.lstrip()
         return current.rstrip() + ("\n\n" if current.strip() else "") + block
 
-    def _project_active_rules(self, workspace_id: str) -> str:
+    def _project_active_rules(self, workspace_id: str, active_rules: list[dict] | None = None, rule_version_id: str | None = None, operation: str = "activate") -> str:
         target = self._workspace_agents_path(workspace_id)
         current = target.read_text(encoding="utf-8") if target.exists() else ""
-        active = self.list_rule_versions(workspace_id, "active")
+        current_hash = self._managed_block_hash(current)
+        if current_hash is None:
+            self._record_projection_alert(workspace_id, rule_version_id, "AGENTS.md has incomplete Forge managed rule markers.")
+            raise ValueError("AGENTS.md has an incomplete Forge managed rule block.")
+        previous = self.db.execute("SELECT resulting_block_hash FROM rule_projections WHERE workspace_id=? AND status='applied' ORDER BY completed_at DESC LIMIT 1", (workspace_id,)).fetchone()
+        if previous and current_hash != previous["resulting_block_hash"]:
+            self._record_projection_alert(workspace_id, rule_version_id, "Forge managed rule block was edited manually; repair it before projection.")
+            raise ValueError("Forge managed AGENTS.md block changed outside Forge; repair is required.")
+        active = active_rules if active_rules is not None else self.list_rule_versions(workspace_id, "active")
         target_content = self._replace_managed_rules(current, self._render_managed_rules(active))
+        target_hash = self._managed_block_hash(target_content)
+        projection_id = str(uuid4())
+        self.db.execute("INSERT INTO rule_projections VALUES (?, ?, ?, ?, 'prepared', ?, ?, ?, NULL, ?, NULL)", (projection_id, workspace_id, rule_version_id, operation, str(target), current_hash, target_hash, now()))
+        self.db.commit()
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_suffix(".tmp")
-        temporary.write_text(target_content, encoding="utf-8")
-        temporary.replace(target)
-        return self._content_hash(target_content)
+        try:
+            temporary.write_text(target_content, encoding="utf-8")
+            temporary.replace(target)
+        except OSError as error:
+            self.db.execute("UPDATE rule_projections SET status='failed', detail=?, completed_at=? WHERE id=?", (str(error), now(), projection_id))
+            self.db.commit()
+            raise ValueError(f"Could not update the managed AGENTS.md block: {error}") from error
+        self.db.execute("UPDATE rule_projections SET status='applied', completed_at=? WHERE id=?", (now(), projection_id))
+        self.db.commit()
+        return target_hash
+
+    def _record_projection_alert(self, workspace_id: str, rule_version_id: str | None, detail: str):
+        self.db.execute("INSERT INTO projection_alerts VALUES (?, ?, ?, 'pending', ?, ?, NULL)", (str(uuid4()), workspace_id, rule_version_id, detail, now()))
+        self.db.commit()
 
     def activate_rule(self, rule_version_id: str):
         rule = self._rule_version(rule_version_id)
@@ -1241,21 +1465,14 @@ class Store:
         policy = self.rule_policy(rule["workspace_id"])
         if policy["mode"] != "autonomous":
             raise ValueError("Only autonomous workspaces can activate a rule without approval.")
-        if self._rule_outcome_count(rule["workspace_id"], rule["rule_key"]) < 2:
-            raise ValueError("A rule needs two independently cited, verified outcomes before activation.")
         card = self._card_for_rule(rule_version_id)
-        if card and self.db.execute("SELECT 1 FROM learning_card_alerts WHERE card_id=? AND kind IN ('possible_duplicate', 'possible_conflict') AND status='pending'", (card["id"],)).fetchone():
+        if not card or card["state"] != "ready":
+            raise ValueError("A rule needs two independently cited, verified outcomes before activation.")
+        if self.db.execute("SELECT 1 FROM learning_card_alerts WHERE (card_id=? OR related_card_id=?) AND kind IN ('possible_duplicate', 'possible_conflict') AND status='pending'", (card["id"], card["id"])).fetchone():
             raise ValueError("Resolve pending Learning Card duplicate/conflict alerts before activation.")
+        projection_hash = self._project_active_rules(rule["workspace_id"], [*self.list_rule_versions(rule["workspace_id"], "active"), rule], rule_version_id)
         self.db.execute("UPDATE rule_versions SET state='active', activated_at=?, evaluation_reason=? WHERE id=?", (now(), "Two independently cited outcomes with validation met the autonomous activation gate.", rule_version_id))
-        if card:
-            self.db.execute("UPDATE learning_cards SET state='active', review_due_at=?, updated_at=? WHERE id=?", ((datetime.now(UTC) + timedelta(days=90)).isoformat(), now(), card["id"]))
-        self.db.commit()
-        try:
-            projection_hash = self._project_active_rules(rule["workspace_id"])
-        except OSError as error:
-            self.db.execute("UPDATE rule_versions SET state='candidate', activated_at=NULL WHERE id=?", (rule_version_id,))
-            self.db.commit()
-            raise ValueError(f"Could not update the managed AGENTS.md block: {error}") from error
+        self.db.execute("UPDATE learning_cards SET state='active', review_due_at=?, updated_at=? WHERE id=?", ((datetime.now(UTC) + timedelta(days=90)).isoformat(), now(), card["id"]))
         self.db.execute("UPDATE rule_versions SET projection_hash=? WHERE id=?", (projection_hash, rule_version_id))
         self.db.commit()
         return self._rule_version(rule_version_id)
@@ -1266,7 +1483,8 @@ class Store:
             raise ValueError("Candidate rule not found.")
         if self.rule_policy(rule["workspace_id"])["mode"] != "approval":
             raise ValueError("Rule proposals are only used in approval workspaces.")
-        if self._rule_outcome_count(rule["workspace_id"], rule["rule_key"]) < 2:
+        card = self._card_for_rule(rule_version_id)
+        if not card or card["state"] != "ready":
             raise ValueError("A rule needs two independently cited, verified outcomes before approval.")
         target = self._workspace_agents_path(rule["workspace_id"])
         current = target.read_text(encoding="utf-8") if target.exists() else ""
@@ -1284,47 +1502,125 @@ class Store:
             raise ValueError("Candidate rule not found.")
         if self.rule_policy(rule["workspace_id"])["mode"] != "approval":
             raise ValueError("Use autonomous activation for this workspace.")
-        if self._rule_outcome_count(rule["workspace_id"], rule["rule_key"]) < 2:
-            raise ValueError("A rule needs two independently cited, verified outcomes before approval.")
         card = self._card_for_rule(rule_version_id)
-        if card and self.db.execute("SELECT 1 FROM learning_card_alerts WHERE card_id=? AND kind IN ('possible_duplicate', 'possible_conflict') AND status='pending'", (card["id"],)).fetchone():
+        if not card or card["state"] != "ready":
+            raise ValueError("A rule needs two independently cited, verified outcomes before approval.")
+        if self.db.execute("SELECT 1 FROM learning_card_alerts WHERE (card_id=? OR related_card_id=?) AND kind IN ('possible_duplicate', 'possible_conflict') AND status='pending'", (card["id"], card["id"])).fetchone():
             raise ValueError("Resolve pending Learning Card duplicate/conflict alerts before approval.")
+        projection_hash = self._project_active_rules(rule["workspace_id"], [*self.list_rule_versions(rule["workspace_id"], "active"), rule], rule_version_id)
         self.db.execute("UPDATE rule_versions SET state='active', activated_at=?, evaluation_reason=? WHERE id=?", (now(), "Developer approved the exact managed AGENTS.md projection after the evidence gate passed.", rule_version_id))
-        if card:
-            self.db.execute("UPDATE learning_cards SET state='active', review_due_at=?, updated_at=? WHERE id=?", ((datetime.now(UTC) + timedelta(days=90)).isoformat(), now(), card["id"]))
-        self.db.commit()
-        try:
-            projection_hash = self._project_active_rules(rule["workspace_id"])
-        except OSError as error:
-            self.db.execute("UPDATE rule_versions SET state='candidate', activated_at=NULL WHERE id=?", (rule_version_id,))
-            self.db.commit()
-            raise ValueError(f"Could not update the managed AGENTS.md block: {error}") from error
+        self.db.execute("UPDATE learning_cards SET state='active', review_due_at=?, updated_at=? WHERE id=?", ((datetime.now(UTC) + timedelta(days=90)).isoformat(), now(), card["id"]))
         self.db.execute("UPDATE rule_versions SET projection_hash=? WHERE id=?", (projection_hash, rule_version_id))
         self.db.commit()
         return self._rule_version(rule_version_id)
 
-    def verify_rule(self, rule_version_id: str, result: str, evidence_span_id: str, note: str):
-        if result not in {"supported", "contradicted", "insufficient_data"}:
-            raise ValueError("Verification result is invalid.")
-        rule = self._rule_version(rule_version_id)
-        if not rule:
-            raise ValueError("Rule not found.")
+    def _verification_input(self, input_id: str):
+        row = self.db.execute(
+            "SELECT i.*, e.kind AS evidence_kind, e.title AS evidence_title, s.quote AS citation_quote FROM verification_inputs i "
+            "JOIN evidence_spans s ON s.id=i.evidence_span_id JOIN evidence_items e ON e.id=s.evidence_id WHERE i.id=?",
+            (input_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def verification_inputs(self, rule_version_id: str):
+        return [self._verification_input(row["id"]) for row in self.db.execute("SELECT id FROM verification_inputs WHERE rule_version_id=? ORDER BY created_at", (rule_version_id,)).fetchall()]
+
+    def _validate_verification_source(self, rule: dict, source_kind: str, evidence_span_id: str, result: str):
+        if source_kind not in {"configured_validation", "git_change", "github_review", "local_failure"}:
+            raise ValueError("Verification source kind is invalid.")
+        evidence = self.db.execute("SELECT e.kind, e.created_at FROM evidence_spans s JOIN evidence_items e ON e.id=s.evidence_id WHERE s.id=?", (evidence_span_id,)).fetchone()
+        if not evidence:
+            raise ValueError("Verification evidence citation was not found.")
         self._workspace_span_ids(rule["workspace_id"], [evidence_span_id])
-        self.db.execute("INSERT INTO rule_verifications VALUES (?, ?, ?, ?, ?, ?)", (str(uuid4()), rule_version_id, result, evidence_span_id, self._outcome_text(note, "note"), now()))
+        baseline = rule["activated_at"] or rule["created_at"]
+        if evidence["created_at"] <= baseline:
+            raise ValueError("Verification evidence must come from later work than the rule.")
+        expected_kinds = {
+            "git_change": {"git_commit"},
+            "github_review": {"github_review", "github_review_comment"},
+            "local_failure": {"local_failure"},
+        }
+        if source_kind in expected_kinds and evidence["kind"] not in expected_kinds[source_kind]:
+            raise ValueError(f"{source_kind} requires matching cited local evidence.")
+        if source_kind == "configured_validation" and result != "insufficient_data":
+            run = self.db.execute("SELECT * FROM validation_runs WHERE evidence_span_id=?", (evidence_span_id,)).fetchone()
+            config_hash = self._current_validation_config_hash(rule["workspace_id"])
+            if not run or not run["trusted"] or run["config_hash"] != config_hash:
+                raise ValueError("Configured verification requires a trusted current Forge validation.")
+            allowed_scopes = json.loads(run["scopes_json"])
+            allowed_categories = json.loads(run["categories_json"])
+            if rule["category"].strip().lower() not in allowed_categories or not all(self._scope_is_covered(scope, allowed_scopes) for scope in rule["scope"]):
+                raise ValueError("Verification validation does not apply to this Learning Card.")
+
+    def _apply_verification(self, rule: dict, result: str, evidence_span_id: str, note: str):
+        rule_version_id = rule["id"]
         card = self._card_for_rule(rule_version_id)
         if card and result == "supported":
             self.db.execute("UPDATE learning_cards SET state='verified', updated_at=? WHERE id=?", (now(), card["id"]))
         if result == "contradicted" and rule["state"] == "active":
-            self.db.execute("UPDATE rule_versions SET state='retracted', retracted_at=? WHERE id=?", (now(), rule_version_id))
-            if card:
-                self.db.execute("UPDATE learning_cards SET state='contradicted', updated_at=? WHERE id=?", (now(), card["id"]))
+            self.db.execute("UPDATE learning_cards SET state='contradicted', updated_at=? WHERE id=?", (now(), card["id"]))
             self.db.commit()
-            projection_hash = self._project_active_rules(rule["workspace_id"])
+            projection_hash = self._project_active_rules(rule["workspace_id"], [item for item in self.list_rule_versions(rule["workspace_id"], "active") if item["id"] != rule_version_id], rule_version_id, "retract")
+            self.db.execute("UPDATE rule_versions SET state='retracted', retracted_at=? WHERE id=?", (now(), rule_version_id))
             self.db.execute("UPDATE rule_versions SET projection_hash=? WHERE id=?", (projection_hash, rule_version_id))
             if card:
                 self.db.execute("UPDATE learning_cards SET state='retracted', updated_at=? WHERE id=?", (now(), card["id"]))
         self.db.commit()
         return self._rule_version(rule_version_id)
+
+    def record_verification_input(self, rule_version_id: str, source_kind: str, result: str, evidence_span_id: str, summary: str, developer_confirmed: bool = False):
+        if result not in {"supported", "contradicted", "insufficient_data"}:
+            raise ValueError("Verification result is invalid.")
+        rule = self._rule_version(rule_version_id)
+        if not rule:
+            raise ValueError("Rule not found.")
+        summary = self._outcome_text(summary, "verification summary")
+        self._validate_verification_source(rule, source_kind, evidence_span_id, result)
+        existing = self.db.execute("SELECT id FROM verification_inputs WHERE rule_version_id=? AND source_kind=? AND evidence_span_id=? AND result=?", (rule_version_id, source_kind, evidence_span_id, result)).fetchone()
+        if existing:
+            return {"input": self._verification_input(existing["id"]), "rule": self._rule_version(rule_version_id), "idempotent": True}
+        input_id = str(uuid4())
+        self.db.execute("INSERT INTO verification_inputs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (input_id, rule["workspace_id"], rule_version_id, source_kind, evidence_span_id, result, summary, int(developer_confirmed), now(), None))
+        self.db.execute("INSERT INTO rule_verifications VALUES (?, ?, ?, ?, ?, ?)", (str(uuid4()), rule_version_id, result, evidence_span_id, summary, now()))
+        self.db.commit()
+        should_apply = result != "insufficient_data" and (source_kind == "configured_validation" or developer_confirmed)
+        if should_apply:
+            updated = self._apply_verification(rule, result, evidence_span_id, summary)
+            self.db.execute("UPDATE verification_inputs SET applied_at=? WHERE id=?", (now(), input_id))
+            self.db.commit()
+        else:
+            updated = self._rule_version(rule_version_id)
+        return {"input": self._verification_input(input_id), "rule": updated, "idempotent": False}
+
+    def confirm_verification_input(self, input_id: str):
+        input_record = self._verification_input(input_id)
+        if not input_record:
+            raise ValueError("Verification input not found.")
+        if input_record["developer_confirmed"]:
+            return {"input": input_record, "rule": self._rule_version(input_record["rule_version_id"]), "idempotent": True}
+        self.db.execute("UPDATE verification_inputs SET developer_confirmed=1 WHERE id=?", (input_id,))
+        self.db.commit()
+        rule = self._rule_version(input_record["rule_version_id"])
+        if input_record["result"] != "insufficient_data":
+            rule = self._apply_verification(rule, input_record["result"], input_record["evidence_span_id"], input_record["summary"])
+            self.db.execute("UPDATE verification_inputs SET applied_at=? WHERE id=?", (now(), input_id))
+            self.db.commit()
+        return {"input": self._verification_input(input_id), "rule": rule, "idempotent": False}
+
+    def record_local_failure(self, rule_version_id: str, failure_class: str, summary: str, result: str = "contradicted", developer_confirmed: bool = False):
+        rule = self._rule_version(rule_version_id)
+        if not rule:
+            raise ValueError("Rule not found.")
+        failure_class = self._outcome_text(failure_class, "failure class", 100).lower().replace(" ", "_")
+        if failure_class not in {"test_failure", "build_failure", "runtime_failure", "review_regression"}:
+            raise ValueError("failure_class must be test_failure, build_failure, runtime_failure, or review_regression.")
+        summary = self._outcome_text(summary, "failure summary")
+        span_id = self.create_evidence(rule["workspace_id"], "local_failure", f"Local failure: {failure_class}", summary, summary, metadata={"failure_class": failure_class})
+        return self.record_verification_input(rule_version_id, "local_failure", result, span_id, summary, developer_confirmed)
+
+    def verify_rule(self, rule_version_id: str, result: str, evidence_span_id: str, note: str):
+        """Backward-compatible configured-validation verification entry point."""
+        return self.record_verification_input(rule_version_id, "configured_validation", result, evidence_span_id, note, developer_confirmed=True)["rule"]
 
     def learning_context(self, workspace_id: str, scope: str | None = None):
         rules = self.list_rule_versions(workspace_id, "active")

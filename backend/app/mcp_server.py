@@ -5,16 +5,23 @@ from typing import Callable, TypeVar
 from mcp.server.fastmcp import FastMCP
 
 from .coordination import coordination_status
+from .runtime import ForgeRuntime
 from .store import Store
 from .validation import run_configured_validation, run_validation
-from .worktree import git_common_dir, inspect_worktree
+from .worktree import inspect_worktree
 
 mcp = FastMCP("Forge")
 Result = TypeVar("Result")
 
 
 def current_store() -> Store:
-    database = Path(os.environ.get("FORGE_DB_PATH", ".forge/forge.sqlite3")).expanduser()
+    configured = os.environ.get("FORGE_DB_PATH")
+    if configured:
+        database = Path(configured).expanduser()
+    else:
+        current = Path.cwd().resolve()
+        repository = next((path for path in (current, *current.parents) if (path / ".git").exists()), current)
+        database = repository / ".forge" / "forge.sqlite3"
     if not database.exists():
         raise RuntimeError(f"Forge is offline: no local database exists at {database}. Start Forge first with `forge start`.")
     return Store(database)
@@ -29,279 +36,229 @@ def with_store(operation: Callable[[Store], Result]) -> Result:
 
 
 @mcp.tool()
-def forge_get_project_context(workspace_id: str = "default") -> dict:
-    """Return confirmed memory, recent agent self-summaries, approved handoffs, and the active intention."""
-    return with_store(lambda store: store.context(workspace_id))
-
-
-@mcp.tool()
 def forge_initialize_workspace(mode: str, workspace_id: str = "default") -> dict:
-    """Persist the one-time workspace rule policy: approval or autonomous."""
+    """Persist the workspace rule policy: approval or autonomous."""
     return with_store(lambda store: store.configure_rule_policy(workspace_id, mode))
 
 
 @mcp.tool()
-def forge_get_learning_context(workspace_id: str = "default", scope: str | None = None) -> dict:
-    """Return compact active rules and the transcript-free self-summary capture prompt."""
-    return with_store(lambda store: store.learning_context(workspace_id, scope))
+def forge_get_session_start_context(workspace_id: str = "default", scope: str | None = None) -> dict:
+    """Return the compact persisted context needed to begin work: active rules, alerts, decisions, and latest handoff."""
+    return with_store(lambda store: store.session_start_context(workspace_id, scope))
 
 
 @mcp.tool()
-def forge_record_session_outcome(agent: str, worktree_path: str, branch: str, outcome_key: str, scope: list[str], category: str, goal: str, problem: str, prior_approach: str, why_prior_approach_failed: str, alternatives: list[dict], chosen_fix: str, rationale: str, validation: str, risk: str, unresolved: str, proposed_rule: str, evidence_span_ids: list[str], learning_card_id: str | None = None, learning_area: str | None = None, learning_trigger: str | None = None, learning_action: str | None = None, workspace_id: str = "default") -> dict:
-    """Store an agent's own bounded, cited self-summary; autonomous workspaces project eligible rules themselves."""
-    def record(store: Store) -> dict:
-        result = store.record_session_outcome(workspace_id, agent, worktree_path, branch, outcome_key, scope, category, goal, problem, prior_approach, why_prior_approach_failed, alternatives, chosen_fix, rationale, validation, risk, unresolved, proposed_rule, evidence_span_ids, learning_card_id, learning_area, learning_trigger, learning_action)
-        rule = result.get("rule")
-        if rule and rule.get("eligible") and store.rule_policy(workspace_id)["mode"] == "autonomous" and rule["state"] == "candidate":
-            result["rule"] = store.activate_rule(rule["id"])
-            result["activation"] = "autonomous"
-        elif rule and rule.get("eligible") and store.rule_policy(workspace_id)["mode"] == "approval":
-            result["activation"] = "pending_developer_approval"
-        return result
-    return with_store(record)
+def forge_get_latest_session_handoff(workspace_id: str = "default") -> dict:
+    """Return the newest persisted Session Handoff only; never infer facts from chat or source files."""
+    return with_store(lambda store: store.get_latest_session_handoff(workspace_id))
 
 
 @mcp.tool()
-def forge_get_rule_proposal(rule_version_id: str) -> dict:
-    """Return the exact managed AGENTS.md diff for an eligible approval-mode rule."""
-    return with_store(lambda store: store.rule_proposal(rule_version_id))
+def forge_get_session_handoff(handoff_id: str) -> dict:
+    """Return one persisted cited Session Handoff."""
+    return with_store(lambda store: store.get_session_handoff(handoff_id) or {"status": "not_found"})
+
+
+def _record_handoff(store: Store, workspace_id: str, payload: dict) -> dict:
+    result = store.record_session_handoff(workspace_id, **payload)
+    rule = result.get("rule")
+    if rule and rule.get("eligible") and store.rule_policy(workspace_id)["mode"] == "autonomous" and rule["state"] == "candidate":
+        result["rule"] = store.activate_rule(rule["id"])
+        result["activation"] = "autonomous"
+    elif rule and rule.get("eligible"):
+        result["activation"] = "pending_developer_approval"
+    return result
+
+
+def _normalized_completion_handoff(handoff: dict) -> dict:
+    if not isinstance(handoff, dict):
+        raise ValueError("handoff must be an object.")
+    payload = dict(handoff)
+    if "unresolved" not in payload and "unresolved_work" in payload:
+        payload["unresolved"] = payload.pop("unresolved_work")
+    agent = payload.get("agent")
+    if isinstance(agent, str):
+        payload["agent"] = agent.strip().lower()
+    if payload.get("agent") not in {"codex", "antigravity", "agent"}:
+        raise ValueError("handoff.agent must be codex, antigravity, or agent.")
+    required = (
+        "agent", "worktree_path", "branch", "outcome_key", "scope", "category",
+        "goal", "problem", "prior_approach", "why_prior_approach_failed",
+        "alternatives", "chosen_fix", "rationale", "validation", "risk", "unresolved",
+        "proposed_rule", "evidence_span_ids",
+    )
+    missing = [field for field in required if field not in payload]
+    if missing:
+        raise ValueError(f"handoff is missing required fields: {', '.join(missing)}.")
+    return payload
+
+
+def _runtime_for(store: Store) -> ForgeRuntime:
+    return ForgeRuntime(store.path.parent.parent)
 
 
 @mcp.tool()
-def forge_approve_rule(rule_version_id: str, developer_approved: bool) -> dict:
-    """Activate an approval-mode rule only after the developer approved its exact diff."""
-    return with_store(lambda store: store.approve_rule(rule_version_id, developer_approved))
+def forge_record_session_handoff(agent: str, worktree_path: str, branch: str, outcome_key: str, scope: list[str], category: str, goal: str, problem: str, prior_approach: str, why_prior_approach_failed: str, alternatives: list[dict], chosen_fix: str, rationale: str, validation: str, risk: str, unresolved: str, proposed_rule: str, evidence_span_ids: list[str], learning_card_id: str | None = None, learning_area: str | None = None, learning_trigger: str | None = None, learning_action: str | None = None, workspace_id: str = "default") -> dict:
+    """Record an agent-authored, transcript-free Session Handoff without releasing an agent lease."""
+    payload = locals().copy()
+    payload.pop("workspace_id")
+    return with_store(lambda store: _record_handoff(store, workspace_id, payload))
 
 
 @mcp.tool()
-def forge_verify_rule(rule_version_id: str, result: str, evidence_span_id: str, note: str) -> dict:
-    """Record later rule evidence; a contradiction retracts the rule and rolls back Forge's managed AGENTS.md block."""
-    return with_store(lambda store: store.verify_rule(rule_version_id, result, evidence_span_id, note))
+def forge_complete_session(session_id: str, handoff: dict, workspace_id: str = "default") -> dict:
+    """Save one cited transcript-free Session Handoff and mark its lease ready for `forge session-end`.
+
+    `handoff` requires: agent, worktree_path, branch, outcome_key, scope, category, goal,
+    problem, prior_approach, why_prior_approach_failed, alternatives, chosen_fix, rationale,
+    validation, risk, unresolved, proposed_rule, and evidence_span_ids. Use `unresolved`, not
+    `unresolved_work`; the latter is accepted only as a compatibility alias. Set
+    `proposed_rule` to `none` when no rule is proposed.
+    """
+    handoff = _normalized_completion_handoff(handoff)
+    agent = handoff["agent"]
+
+    def complete(store: Store) -> dict:
+        result = _record_handoff(store, workspace_id, handoff)
+        completion = _runtime_for(store).mark_handoff(session_id, agent, result["outcome"]["id"])
+        return {**result, "completion": completion, "learning_alerts": store.learning_alerts(workspace_id)}
+
+    return with_store(complete)
 
 
 @mcp.tool()
-def forge_get_rule_history(workspace_id: str = "default", state: str | None = None) -> list[dict]:
-    """Return versioned local rule history with citations and verification outcomes."""
-    return with_store(lambda store: store.list_rule_versions(workspace_id, state))
+def forge_heartbeat_session(session_id: str) -> dict:
+    """Refresh one active local Forge session lease. It stores only session timing and agent identity."""
+    return with_store(lambda store: _runtime_for(store).heartbeat(session_id))
 
 
 @mcp.tool()
-def forge_get_learning_cards(workspace_id: str = "default", state: str | None = None) -> list[dict]:
-    """Return compact local Learning Card history and cited observations."""
+def forge_list_learning_cards(workspace_id: str = "default", state: str | None = None) -> list[dict]:
+    """List persisted Learning Cards with observations, linked rule versions, and pending alerts."""
     return with_store(lambda store: store.learning_cards(workspace_id, state))
 
 
 @mcp.tool()
+def forge_get_learning_card(card_id: str) -> dict:
+    """Return one persisted Learning Card timeline and its immutable observations."""
+    def get(store: Store) -> dict:
+        return next((card for card in store.learning_cards_for_id(card_id)), {"status": "not_found"})
+    return with_store(get)
+
+
+@mcp.tool()
 def forge_get_learning_alerts(workspace_id: str = "default") -> list[dict]:
-    """Return duplicate, conflict, and overdue-review alerts for the agent to present to the developer."""
+    """Return duplicate, conflict, overdue-review, and projection-repair alerts."""
     return with_store(lambda store: store.learning_alerts(workspace_id))
 
 
 @mcp.tool()
 def forge_review_learning_alert(alert_id: str, decision: str) -> dict:
-    """Record the developer's explicit decision: merged, kept_separate, marked_conflict, or dismissed."""
+    """Record the developer's explicit duplicate/conflict decision: merged, kept_separate, or marked_conflict."""
     return with_store(lambda store: store.review_learning_alert(alert_id, decision))
 
 
 @mcp.tool()
-def forge_get_github_sync_status(workspace_id: str = "default") -> dict:
-    """Return compact, local-only GitHub sync health and safe telemetry; never returns credentials or API payloads."""
-    def status(store: Store) -> dict:
-        value = store.github_poll_status(workspace_id)
-        keys = ("workspace_id", "enabled", "health", "partial", "in_progress", "pull_cursor", "last_success_at", "next_poll_at", "retry_after_at", "consecutive_failures", "last_error", "last_error_kind", "last_http_status", "last_request_ms", "rate_limit_remaining", "rate_limit_limit", "rate_limit_reset_at")
-        return {key: value.get(key) for key in keys}
-    return with_store(status)
+def forge_get_rule_history(workspace_id: str = "default", state: str | None = None) -> list[dict]:
+    """Return local rule version and verification history."""
+    return with_store(lambda store: store.list_rule_versions(workspace_id, state))
 
 
 @mcp.tool()
-def forge_get_session_capture_guidance() -> dict:
-    """Return the deterministic, privacy-preserving checklist for an end-of-session handoff."""
-    return {
-        "status": "ready",
-        "rules": [
-            "Review only the current agent context; never send a raw chat transcript to Forge.",
-            "Describe what changed, why, decisions, problems, fixes, validation, and unresolved work.",
-            "Cite at least one existing local Git, PR, or review evidence span.",
-            "Create a session context as pending; it never becomes decision memory automatically.",
-            "Propose durable decisions separately and only when they are reusable across future work.",
-        ],
-    }
+def forge_get_rule_proposal(rule_version_id: str) -> dict:
+    """Return the exact managed AGENTS.md diff for a ready approval-mode rule."""
+    return with_store(lambda store: store.rule_proposal(rule_version_id))
+
+
+@mcp.tool()
+def forge_approve_rule(rule_version_id: str, developer_approved: bool) -> dict:
+    """Apply a ready approval-mode rule only after explicit developer approval."""
+    return with_store(lambda store: store.approve_rule(rule_version_id, developer_approved))
+
+
+@mcp.tool()
+def forge_verify_rule(rule_version_id: str, result: str, evidence_span_id: str, note: str) -> dict:
+    """Record later configured-validation evidence that verifies or contradicts an active rule."""
+    return with_store(lambda store: store.verify_rule(rule_version_id, result, evidence_span_id, note))
+
+
+@mcp.tool()
+def forge_record_verification_input(rule_version_id: str, source_kind: str, result: str, evidence_span_id: str, summary: str, developer_confirmed: bool = False) -> dict:
+    """Record cited later Git, GitHub review, local failure, or configured-validation evidence. Non-validation inputs require developer confirmation before changing a rule."""
+    return with_store(lambda store: store.record_verification_input(rule_version_id, source_kind, result, evidence_span_id, summary, developer_confirmed))
+
+
+@mcp.tool()
+def forge_record_local_failure(rule_version_id: str, failure_class: str, summary: str, result: str = "contradicted", developer_confirmed: bool = False) -> dict:
+    """Record a bounded local failure without command output. Developer confirmation is required before it changes a rule."""
+    return with_store(lambda store: store.record_local_failure(rule_version_id, failure_class, summary, result, developer_confirmed))
+
+
+@mcp.tool()
+def forge_confirm_verification_input(input_id: str) -> dict:
+    """Apply a previously cited non-validation verification input after the developer explicitly confirms it."""
+    return with_store(lambda store: store.confirm_verification_input(input_id))
 
 
 @mcp.tool()
 def forge_get_recent_evidence(workspace_id: str = "default", limit: int = 20) -> list[dict]:
-    """Return recent immutable evidence spans for the active project so an agent can cite a handoff."""
+    """Return recent safe evidence spans for citation."""
     return with_store(lambda store: store.recent_evidence_spans(workspace_id, max(1, min(limit, 50))))
 
 
 @mcp.tool()
 def forge_run_validation(label: str, command: list[str], timeout_seconds: int = 900, workspace_id: str = "default") -> dict:
-    """Run an explicit local command in the registered repository and save only safe pass/fail metadata, never raw output."""
+    """Run a manual untrusted validation. Its result is context only and can never advance a Learning Card."""
     return with_store(lambda store: run_validation(store, workspace_id, label, command, timeout_seconds))
 
 
 @mcp.tool()
 def forge_run_configured_validation(validation_id: str, workspace_id: str = "default") -> dict:
-    """Run one checked-in Forge validation by ID. Only these results can support Learning Cards."""
+    """Run one configured Forge validation by ID; only these safe results can support Learning Cards."""
     return with_store(lambda store: run_configured_validation(store, workspace_id, validation_id))
 
 
 @mcp.tool()
+def forge_get_legacy_history(workspace_id: str = "default", limit: int = 20) -> dict:
+    """Read preserved legacy session contexts and rules. Legacy data is read-only and cannot affect new learning."""
+    return with_store(lambda store: store.legacy_history(workspace_id, limit))
+
+
+@mcp.tool()
+def forge_record_decision(statement: str, evidence_quote: str, category: str = "process", workspace_id: str = "default", evidence_span_ids: list[str] | None = None) -> dict:
+    """Create a pending durable decision unrelated to rule activation."""
+    return with_store(lambda store: store.create_pending(workspace_id, statement, category, evidence_quote, evidence_span_ids=evidence_span_ids))
+
+
+@mcp.tool()
+def forge_retrieve_decisions(workspace_id: str = "default", file_path: str | None = None, scope: str | None = None, category: str | None = None, status: str | None = "confirmed", limit: int = 20) -> list[dict]:
+    """Retrieve cited durable decisions without reading a transcript."""
+    return with_store(lambda store: store.retrieve_decisions(workspace_id, file_path=file_path, scope=scope, category=category, status=status, limit=limit))
+
+
+@mcp.tool()
+def forge_get_github_sync_status(workspace_id: str = "default") -> dict:
+    """Return local-only GitHub sync health and safe telemetry."""
+    return with_store(lambda store: store.github_poll_status(workspace_id))
+
+
+@mcp.tool()
 def forge_start_work_session(agent: str, worktree_path: str, workspace_id: str = "default") -> dict:
-    """Record a local Git work boundary at session start. It stores no chat content and creates no memory."""
+    """Record a local Git work boundary; no chat content is captured."""
     snapshot = inspect_worktree(worktree_path)
     return with_store(lambda store: store.start_work_session(workspace_id, agent, snapshot["worktree_path"], snapshot["branch"], snapshot["head_commit"]))
 
 
 @mcp.tool()
 def forge_get_worktree_delta(worktree_path: str, base_commit: str | None = None) -> dict:
-    """Read the current local Git worktree delta so an agent can split multiple completed changes into separate cited handoffs."""
+    """Return local Git delta facts for the active worktree."""
     return inspect_worktree(worktree_path, base_commit)
 
 
 @mcp.tool()
 def forge_get_coordination_status(workspace_id: str = "default") -> dict:
-    """Return local-Git worktree coordination facts, exact overlap warnings, and branch/conflict states without changing files."""
+    """Return local worktree coordination facts and overlap warnings."""
     return with_store(lambda store: coordination_status(store, workspace_id))
-
-
-@mcp.tool()
-def forge_get_worktree_status(worktree_path: str, workspace_id: str | None = None) -> dict:
-    """Return one worktree's local Git status. Forge is offline when its local database is unavailable."""
-    def read(store: Store) -> dict:
-        try:
-            resolved_workspace = workspace_id or store.workspace_for_git_common_dir(git_common_dir(worktree_path)) or store.workspace_for_path(worktree_path)
-        except ValueError as error:
-            return {"status": "unavailable", "reason": str(error), "worktree_path": str(Path(worktree_path).resolve())}
-        if not resolved_workspace:
-            return {"status": "unavailable", "reason": "Worktree is not associated with a registered Forge repository.", "worktree_path": str(Path(worktree_path).resolve())}
-        result = coordination_status(store, resolved_workspace)
-        for worktree in result["worktrees"]:
-            if worktree["worktree_path"].lower() == str(Path(worktree_path).resolve()).lower():
-                return {"status": result["status"], "workspace_id": resolved_workspace, "worktree": worktree, "overlaps": [overlap for overlap in result["overlaps"] if worktree["worktree_path"] in overlap["worktree_paths"]]}
-        return {"status": "unavailable", "reason": "Worktree was not returned by local Git discovery.", "worktree_path": str(Path(worktree_path).resolve())}
-    return with_store(read)
-
-
-@mcp.tool()
-def forge_finish_work_session(session_id: str) -> dict:
-    """Close a recorded local Git work boundary using its current HEAD. It stores no chat content."""
-    def finish(store: Store) -> dict:
-        session = store.get_work_session(session_id)
-        if not session:
-            raise ValueError("Work session not found.")
-        snapshot = inspect_worktree(session["worktree_path"], session["base_commit"])
-        return {"session": store.finish_work_session(session_id, snapshot["head_commit"]), "delta": snapshot}
-    return with_store(finish)
-
-
-@mcp.tool()
-def forge_record_decision(statement: str, evidence_quote: str, category: str = "process", workspace_id: str = "default", evidence_span_ids: list[str] | None = None) -> dict:
-    """Create a pending evidence-backed decision. The developer must review it in Forge."""
-    return with_store(lambda store: store.create_pending(workspace_id, statement, category, evidence_quote, evidence_span_ids=evidence_span_ids))
-
-
-@mcp.tool()
-def forge_record_session_context(agent: str, worktree_path: str, branch: str, what_changed: str, why: str, decisions: str, problems: str, fixes: str, validation: str, unresolved: str, evidence_span_ids: list[str], workspace_id: str = "default", base_commit: str | None = None, head_commit: str | None = None) -> dict:
-    """Create a pending multi-agent session handoff cited to existing project evidence; it never creates decision memory."""
-    return with_store(lambda store: store.create_session_context(workspace_id, agent, worktree_path, branch, what_changed, why, decisions, problems, fixes, validation, unresolved, evidence_span_ids, base_commit, head_commit))
-
-
-@mcp.tool()
-def forge_record_session_contexts(handoffs: list[dict], workspace_id: str = "default") -> list[dict]:
-    """Create multiple pending, cited session handoffs from one agent session. Forge never chooses, approves, or turns them into memory."""
-    return with_store(lambda store: store.create_session_contexts(workspace_id, handoffs))
-
-
-@mcp.tool()
-def forge_record_structured_session_handoff(agent: str, worktree_path: str, branch: str, evidence_span_ids: list[str], template: dict, workspace_id: str = "default", base_commit: str | None = None, head_commit: str | None = None) -> dict:
-    """Create one pending template-v1 handoff with explicit Git citations; unknown facts must be labeled unknown or not_run."""
-    return with_store(lambda store: store.create_structured_session_context(workspace_id, agent, worktree_path, branch, evidence_span_ids, template, base_commit, head_commit))
-
-
-@mcp.tool()
-def forge_propose_decision_from_session_context(session_context_id: str, statement: str, category: str = "process", workspace_id: str = "default") -> dict:
-    """Create a pending durable decision from one approved session handoff. The developer must still confirm it separately."""
-    def create(store: Store) -> dict:
-        session = store.get_session_context(session_context_id)
-        if not session:
-            raise ValueError("Session context not found.")
-        return store.create_pending(workspace_id, statement, category, session["what_changed"], evidence_span_ids=[citation["span_id"] for citation in session["citations"]], source_session_context_id=session_context_id)
-    return with_store(create)
-
-
-@mcp.tool()
-def forge_propose_structured_decision(source_session_context_id: str, evidence_span_ids: list[str], template: dict, workspace_id: str = "default") -> dict:
-    """Create a pending ADR-lite decision from an approved handoff. Only developer confirmation creates durable memory."""
-    return with_store(lambda store: store.create_structured_decision(workspace_id, source_session_context_id, evidence_span_ids, template))
-
-
-@mcp.tool()
-def forge_retrieve_decisions(workspace_id: str = "default", file_path: str | None = None, scope: str | None = None, category: str | None = None, status: str | None = "confirmed", limit: int = 20) -> list[dict]:
-    """Retrieve cited decisions by file path, scope, category, and review status without reading any chat transcript."""
-    return with_store(lambda store: store.retrieve_decisions(workspace_id, file_path=file_path, scope=scope, category=category, status=status, limit=limit))
-
-
-@mcp.tool()
-def forge_record_reflection(reflection: str, evidence_quote: str, workspace_id: str = "default") -> dict:
-    """Record a pending reflection without accessing chat transcripts."""
-    return with_store(lambda store: store.create_reflection(workspace_id, reflection, evidence_quote))
-
-
-@mcp.tool()
-def forge_get_active_intention(workspace_id: str = "default") -> dict:
-    """Return the single developer-chosen active intention or insufficient data."""
-    return with_store(lambda store: store.active_intention(workspace_id))
-
-
-@mcp.tool()
-def forge_get_agents_guardrail_candidates(workspace_id: str = "default") -> dict:
-    """Return repeated confirmed guardrails with citations; present any AGENTS.md diff for developer approval before editing."""
-    return with_store(lambda store: store.guardrail_candidates(workspace_id))
-
-
-@mcp.tool()
-def forge_get_portable_guardrails(workspace_id: str = "default") -> list[dict]:
-    """Return individually approved guardrails from other projects; never copy a whole AGENTS.md file."""
-    return with_store(lambda store: store.portable_guardrails(workspace_id))
-
-
-@mcp.tool()
-def forge_propose_agents_guardrail(statement: str, current_agents_content: str = "", workspace_id: str = "default") -> dict:
-    """Create an exact AGENTS.md diff from a cited guardrail. Show it in chat and wait for explicit developer approval before editing the file."""
-    return with_store(lambda store: store.propose_agents_guardrail(workspace_id, statement, current_agents_content))
-
-
-@mcp.tool()
-def forge_record_agents_guardrail_approval(statement: str, proposed_diff: str, developer_approved: bool, workspace_id: str = "default") -> dict:
-    """Record an AGENTS.md handoff only after the developer explicitly approved the shown diff and the active agent applied it."""
-    if not developer_approved:
-        raise ValueError("Record approval only after the developer explicitly said yes to the shown diff.")
-    return with_store(lambda store: store.record_guardrail_approval(workspace_id, statement, proposed_diff))
-
-
-@mcp.tool()
-def forge_prepare_agents_guardrail_handoff(statement: str, current_agents_content: str = "", target_agents_path: str = "AGENTS.md", workspace_id: str = "default") -> dict:
-    """Create a persisted exact AGENTS.md proposal. Show its diff, wait for developer approval, then apply it through normal file editing; Forge never edits the file."""
-    return with_store(lambda store: store.prepare_agents_guardrail_handoff(workspace_id, statement, current_agents_content, target_agents_path))
-
-
-@mcp.tool()
-def forge_prepare_portable_guardrail_handoff(source_guardrail_id: str, current_agents_content: str = "", target_agents_path: str = "AGENTS.md", workspace_id: str = "default") -> dict:
-    """Create one target-project diff for a portable approved rule; never copy another project's entire AGENTS.md file."""
-    return with_store(lambda store: store.prepare_agents_guardrail_handoff(workspace_id, "", current_agents_content, target_agents_path, source_guardrail_id))
-
-
-@mcp.tool()
-def forge_complete_agents_guardrail_handoff(handoff_id: str, developer_approved: bool, resulting_agents_content: str) -> dict:
-    """Record an already agent-applied AGENTS.md edit only when its resulting content hash matches the developer-approved proposal."""
-    return with_store(lambda store: store.complete_agents_guardrail_handoff(handoff_id, developer_approved, resulting_agents_content))
-
-
-@mcp.tool()
-def forge_record_portable_guardrail_adoption(source_guardrail_id: str, developer_approved: bool, workspace_id: str = "default") -> dict:
-    """Record one developer-approved portable rule after the active agent applied its shown diff."""
-    return with_store(lambda store: store.adopt_portable_guardrail(workspace_id, source_guardrail_id, developer_approved))
 
 
 def main():

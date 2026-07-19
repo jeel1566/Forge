@@ -20,7 +20,7 @@ flowchart TB
   subgraph Forge[Forge on the developer machine]
     MCP[Local MCP server]
     API[Loopback API + dashboard]
-    DB[(SQLite: evidence, decisions, rules, events)]
+  DB[(SQLite: handoffs, validations, cards, rules, events)]
     Rules[Managed rule projection in AGENTS.md]
     MCP <--> DB
     API <--> DB
@@ -57,8 +57,8 @@ flowchart LR
 
 1. **Collect** — an agent submits its own summary; Git, tests, errors, and optional GitHub data provide local facts.
 2. **Cite evidence** — Forge links the summary to exact commits, changed paths, test results, or review records.
-3. **Record decision** — Forge records what changed, why it was chosen, alternatives removed, failure of the old approach, and validation.
-4. **Evaluate learning** — a candidate rule is checked for scope, evidence quality, duplication, and policy mode.
+3. **Record handoff** — Forge records what changed, why it was chosen, alternatives removed, failure of the old approach, and validation.
+4. **Evaluate learning** — a Learning Card is checked for structured identity, configured validation coverage, duplication, and policy mode.
 5. **Verify later work** — later results support, contradict, or leave the rule unverified; silence proves nothing.
 6. **Detect repetition** — repeated, separately cited failures can strengthen a candidate rule.
 7. **Publish or roll back** — approval mode waits for confirmation; autonomous mode may project a safe rule and records a reversible version.
@@ -69,14 +69,14 @@ On first workspace initialization, Forge asks once whether rules run in `approva
 
 | Mode | Rule transition | Required safeguard |
 |---|---|---|
-| Approval | Candidate → developer approval → active | Exact rule diff and cited evidence are shown. |
-| Autonomous | Evidence-backed candidate → active | Scope, confidence, provenance, version, expiry/review date, and rollback record are mandatory. |
+| Approval | Ready Learning Card → developer approval → active | Exact rule diff and cited configured validation evidence are shown. |
+| Autonomous | Ready Learning Card → active | Scope, provenance, version, review date, and rollback journal are mandatory. |
 
 Both modes prohibit raw transcript capture, secrets in memory, auto-merges, conflict resolution, GitHub writes, and rules without evidence.
 
 ## Current implementation versus target
 
-Today, Forge provides local Git/GitHub evidence, SQLite persistence, a dashboard, work-session boundaries, cited handoffs, and review-first decision/guardrail workflows. The v1 target adds the persisted policy setting, learning lifecycle, automatic evidence-gated rule projection, and rollback. Documentation labels these as target behavior until their corresponding migrations, API endpoints, MCP tools, and tests are delivered.
+Forge provides local Git/GitHub evidence, SQLite persistence, work-session boundaries, cited Session Handoffs, configured local validation, Learning Cards, and managed-rule rollback. Legacy session-context and guardrail paths are retained as read-only history only; new agents use the focused Session Handoff and Learning Card MCP tools.
 
 ## Runtime and failure behavior
 

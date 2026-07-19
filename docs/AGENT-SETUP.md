@@ -1,42 +1,84 @@
 # Codex and Antigravity setup
 
-## Current installation
+## Install Forge once
 
 ```powershell
-pip install -e .
-forge start --path C:\path\to\repository
+pipx install forge
+forge install codex
+# or, from each dashboard-enabled project:
+forge install antigravity --path .
 ```
 
-Forge creates or opens `C:\path\to\repository\.forge\forge.sqlite3`. Configure both agents to use this same database.
+`pipx` places `forge` and `forge-mcp` on the user PATH. Installing Codex changes only `~/.codex`; installing Antigravity changes only `~/.gemini`. Each installer preserves unrelated MCP servers and writes only a marked Forge instruction block.
 
-### Codex
+The installer also adds a Forge-owned global `forge-end` skill for that selected agent only. Typing `/forge_end` asks the agent to review its own work, run configured validation, save one cited transcript-free handoff with `forge_complete_session`, show persisted alerts, and then release its lease. It never lets Forge read chat transcripts.
+
+`forge install codex --dry-run` shows the intended Forge-owned changes without writing files. Re-running `forge install codex` is safe and reports whether setup is healthy; use `forge install codex --repair` or `forge repair codex` only to restore missing Forge-owned MCP entries, managed instructions, and the Forge End skill. Forge refuses to overwrite incomplete managed markers or a non-Forge skill.
+
+For a pinned pre-release from this repository:
 
 ```powershell
-codex mcp add forge --env FORGE_DB_PATH="C:\path\to\repository\.forge\forge.sqlite3" -- forge-mcp
+pipx install "git+https://github.com/jeel1566/Forge.git@v1.0.0"
 ```
 
-### Antigravity
+## Start a project session
 
-Add this to `~/.gemini/config/mcp_config.json`:
+When an installed agent opens a repository, its managed Forge instruction runs:
 
-```json
-{
-  "mcpServers": {
-    "forge": {
-      "command": "forge-mcp",
-      "env": {
-        "FORGE_DB_PATH": "C:\\path\\to\\repository\\.forge\\forge.sqlite3"
-      }
-    }
-  }
-}
+```powershell
+forge session-start --path . --agent codex
 ```
 
-Restart the MCP connection after saving.
+This creates or opens that repository's `.forge\forge.sqlite3`, registers the repository, and creates or refreshes a session lease. MCP reads and writes this local database directly; it does not require a dashboard server.
+
+For a dashboard that survives Antigravity command completion, install the project sidecar once from that repository:
+
+```powershell
+forge install antigravity --path .
+```
+
+The command creates one Forge-owned Antigravity sidecar configuration, enables only that sidecar, and prints its loopback URL. Fully restart Antigravity once so it discovers the new sidecar. The sidecar owns and restarts the dashboard process; Forge never uses a detached child of an agent shell command for this purpose. Use `forge start --path .` for a foreground dashboard in Codex until Codex exposes an installable host-lifecycle adapter.
+
+Keep the returned `session_id`. At the end of the agent session, the Forge End skill completes and releases that exact lease:
+
+```powershell
+forge session-end --path . --session-id <session_id>
+```
+
+Forge stops after the final active agent lease is released. `forge_heartbeat_session` refreshes a live session; expired leases and stale startup locks are cleaned safely on the next Forge operation.
+
+## Check and repair
+
+```powershell
+forge doctor --path .
+forge doctor --path . --agent codex
+forge repair --path .
+forge repair codex
+```
+
+`doctor` is read-only: it checks database integrity when a database exists, `forge.validation.json`, safe runtime metadata, and agent installation state. It never creates a database, prints tokens, or shows raw MCP configuration. `repair --path .` removes only stale Forge runtime metadata; it never removes project history or stops an unverified process.
+
+Remove an agent-specific installation safely with:
+
+```powershell
+forge uninstall codex
+# or, for a project sidecar: forge uninstall antigravity --path .
+```
+
+Uninstall removes only that agent’s Forge MCP entry, Forge-managed instruction block, and Forge End skill. With `--path .`, Antigravity uninstall also removes only that repository's Forge-owned sidecar and enablement. It never deletes any repository’s `.forge` database or local shared history.
+
+## Upgrade
+
+```powershell
+pipx upgrade forge
+forge doctor --path .
+```
+
+Install Forge once per agent, then use it in every project. Each project keeps separate local data in its own `.forge` directory.
 
 ## How agents use Forge
 
-1. At session start, the agent reads repository instructions and calls Forge for relevant local context.
+1. At session start, the agent runs `forge session-start --path . --agent <agent>`, then calls `forge_get_session_start_context`.
 2. The agent works normally; Forge never watches or extracts the private chat.
 3. At session end, **the same agent** summarises its own decisions, failures, prior approach, fix, validation, and unresolved work.
 4. The agent submits the compact structured outcome through MCP with evidence references.
@@ -48,7 +90,7 @@ Codex does not summarise Antigravity. Antigravity does not summarise Codex. Both
 
 During `forge_initialize_workspace`, Forge asks once whether this workspace uses `approval` or `autonomous` rules. In approval mode, the agent shows the exact managed `AGENTS.md` diff before activation. In autonomous mode, Forge may update only its managed rule section after its evidence gate succeeds; every update is versioned and reversible.
 
-The current build has the review-first guardrail handoff flow. Do not configure agents to call the target tools until they are implemented.
+The installed MCP command never hard-codes a particular repository database. It discovers the active repository's local `.forge` database and reports offline safely if session initialization has not run.
 
 ## Offline behavior
 

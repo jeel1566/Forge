@@ -4,35 +4,45 @@
 
 The tools listed as **current** exist in the local implementation. The **v1 target** tools describe the new Forge learning loop and must be implemented before agents are instructed to call them.
 
-## Current MCP tools
+## Canonical MCP tools
 
 | Tool | Purpose |
 |---|---|
-| `forge_get_project_context` | Reads confirmed decisions, approved handoffs, and active intention. |
-| `forge_get_session_capture_guidance` | Returns transcript-free end-of-session guidance. |
+| `forge_get_session_start_context` | Reads active rules, alerts, cited decisions, and the latest handoff. |
+| `forge_get_latest_session_handoff` / `forge_get_session_handoff` | Reads persisted cited handoffs only. |
 | `forge_get_recent_evidence` | Lists existing local evidence spans for citations. |
 | `forge_start_work_session` / `forge_finish_work_session` | Records Git work boundaries only. |
 | `forge_get_worktree_delta` / `forge_get_coordination_status` | Returns local Git facts and exact overlap warnings. |
-| `forge_record_session_context(s)` | Saves cited agent-supplied handoffs. |
+| `forge_record_session_handoff` | Saves one canonical cited agent-supplied handoff without ending a runtime lease. |
+| `forge_heartbeat_session` | Refreshes one active session-ID lease without storing chat content. |
+| `forge_complete_session` | Saves the handoff, marks its exact session-ID lease complete, and returns persisted alerts before `forge session-end`. |
 | `forge_record_decision` / `forge_record_reflection` | Saves a pending cited proposal or reflection. |
 | `forge_get_github_sync_status` | Returns safe persisted GitHub sync health and telemetry. |
 
 Current MCP never reads a transcript, returns secrets, or silently promotes a record to memory.
 
-## Implemented rule-loop MCP tools
+## Learning-card MCP tools
 
 | Tool | Role |
 |---|---|
 | `forge_initialize_workspace` | Persists `approval` or `autonomous` rule policy for the workspace. |
-| `forge_get_learning_context` | Returns compact active rules, relevant decisions, recent related failures, and capture prompt. |
-| `forge_run_validation` | Runs an explicit local command in the registered repository and saves only safe pass/fail metadata; raw output is never stored. |
-| `forge_record_session_outcome` | Accepts an agent's structured self-summary, validation citations, idempotency key, and optional Learning Card fields; it evaluates and automatically projects an eligible autonomous rule. |
+| `forge_list_learning_cards` / `forge_get_learning_card` | Returns card state, observations, rules, and alerts. |
+| `forge_run_validation` | Runs an explicit manual command; it is always untrusted context. |
+| `forge_run_configured_validation` | Runs an approved validation ID; only these results can support a card. |
+| `forge_record_session_handoff` | Accepts the structured self-summary and optional Learning Card observation. |
+| `forge_complete_session` | Required by the installed `/forge_end` skill before normal lease release. |
 | `forge_get_rule_proposal` | Returns exact managed `AGENTS.md` diff for approval mode. |
 | `forge_approve_rule` | Applies an eligible approval-mode rule after explicit developer approval. |
 | `forge_verify_rule` | Records later supporting, contradicting, or insufficient evidence. |
-| `forge_get_rule_history` | Returns versioned provenance, state, and verification history. |
+| `forge_record_verification_input` | Saves cited later Git, GitHub review, local-failure, or configured-validation verification evidence. Non-validation evidence stays pending until developer confirmation. |
+| `forge_record_local_failure` / `forge_confirm_verification_input` | Saves a bounded local failure without raw output, then applies a pending finding only after developer confirmation. |
+| `forge_get_rule_history` / `forge_get_legacy_history` | Returns current provenance or read-only preserved history. |
 
-All writes return stable IDs, status, timestamps, citations, and a deterministic reason. A Learning Card uses `learning_area`, `learning_trigger`, and `learning_action`, so later outcomes can join the same observed problem despite different rule wording. Rule activation needs two different `local_validation` citations captured by Forge; an agent's written validation claim alone is insufficient. Writes reject secrets, raw transcripts, unsupported evidence references, and unbounded content.
+All writes return stable IDs, status, timestamps, citations, and a deterministic reason. A Learning Card uses normalized `scope`, `learning_area`, `learning_trigger`, and `learning_action`, so later handoffs join the same observed problem despite different wording. Rule activation needs two different, applicable configured validation citations. Writes reject secrets, raw transcripts, unsupported evidence references, and unbounded content.
+
+`forge session-end --session-id <session_id>` rejects an active lease that has not been marked by `forge_complete_session`. A developer can explicitly abandon a session using one fixed reason (`validation_unavailable`, `handoff_incomplete`, `developer_cancelled`, or `agent_error`); Forge records that safe event without chat content. Runtime health includes a random instance ID, so Forge never stops a process whose identity no longer matches the project metadata.
+
+Configured validations remain the only automatic Learning Card activation evidence. Later Git changes, GitHub reviews, and structured local failures are cited verification inputs: Forge records them, but applies support or contradiction only after explicit developer confirmation. An `insufficient_data` input remains neutral.
 
 ## HTTP API direction
 

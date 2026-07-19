@@ -37,16 +37,20 @@ The first vertical slice of the rule loop is implemented: a workspace selects ap
 ## Install and run the current local core
 
 ```powershell
-pip install -e .
-pnpm --dir frontend build
-forge start --path .
+pipx install forge
+forge install codex
+# or, from a project: forge install antigravity --path .
+forge doctor --path .
+forge session-start --path . --agent codex
 ```
 
-Open `http://127.0.0.1:8000`. Forge stores its database at `.forge/forge.sqlite3` in the selected repository.
+`forge install antigravity --path .` adds an enabled Antigravity-owned sidecar for that repository's loopback dashboard and prints its URL. Restart Antigravity once after installation so it discovers the sidecar. Forge stores its database at `.forge/forge.sqlite3` in the selected repository.
 
-Connect the same database to Codex or Antigravity using [agent setup](docs/AGENT-SETUP.md). The agent reads the repository instructions, retrieves Forge context, and submits its own structured end-of-session summary; Forge never extracts or uploads the raw conversation.
+Install Forge for one agent at a time using [agent setup](docs/AGENT-SETUP.md). The global MCP configuration uses `forge-mcp` without a fixed database path; each project session resolves its own `.forge` database. The agent reads context and submits its own structured end-of-session summary; Forge never extracts or uploads the raw conversation.
 
 ## GPT-5.6 and Codex
+
+`forge session-start` creates or reuses one local session lease for that repository and returns a unique `session_id`. MCP reads and writes the local SQLite database directly. For Antigravity, the repository sidecar owns the dashboard server; for Codex, use `forge start --path .` when you want a dashboard until a Codex host-lifecycle adapter is available.
 
 Forge contains no LangChain, LlamaIndex, OpenAI API, or GPT-5.6 integration. If Codex is configured to use GPT-5.6, the model is the agent that writes the structured session summary and calls MCP; Forge treats it like any other agent and stores only the submitted summary and cited local evidence. See [model runtime boundaries](docs/MODEL-RUNTIME.md).
 
