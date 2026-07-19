@@ -6,6 +6,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .coordination import coordination_status
 from .store import Store
+from .validation import run_configured_validation, run_validation
 from .worktree import git_common_dir, inspect_worktree
 
 mcp = FastMCP("Forge")
@@ -29,8 +30,77 @@ def with_store(operation: Callable[[Store], Result]) -> Result:
 
 @mcp.tool()
 def forge_get_project_context(workspace_id: str = "default") -> dict:
-    """Return confirmed decision memory, approved session handoffs, and the active intention."""
+    """Return confirmed memory, recent agent self-summaries, approved handoffs, and the active intention."""
     return with_store(lambda store: store.context(workspace_id))
+
+
+@mcp.tool()
+def forge_initialize_workspace(mode: str, workspace_id: str = "default") -> dict:
+    """Persist the one-time workspace rule policy: approval or autonomous."""
+    return with_store(lambda store: store.configure_rule_policy(workspace_id, mode))
+
+
+@mcp.tool()
+def forge_get_learning_context(workspace_id: str = "default", scope: str | None = None) -> dict:
+    """Return compact active rules and the transcript-free self-summary capture prompt."""
+    return with_store(lambda store: store.learning_context(workspace_id, scope))
+
+
+@mcp.tool()
+def forge_record_session_outcome(agent: str, worktree_path: str, branch: str, outcome_key: str, scope: list[str], category: str, goal: str, problem: str, prior_approach: str, why_prior_approach_failed: str, alternatives: list[dict], chosen_fix: str, rationale: str, validation: str, risk: str, unresolved: str, proposed_rule: str, evidence_span_ids: list[str], learning_card_id: str | None = None, learning_area: str | None = None, learning_trigger: str | None = None, learning_action: str | None = None, workspace_id: str = "default") -> dict:
+    """Store an agent's own bounded, cited self-summary; autonomous workspaces project eligible rules themselves."""
+    def record(store: Store) -> dict:
+        result = store.record_session_outcome(workspace_id, agent, worktree_path, branch, outcome_key, scope, category, goal, problem, prior_approach, why_prior_approach_failed, alternatives, chosen_fix, rationale, validation, risk, unresolved, proposed_rule, evidence_span_ids, learning_card_id, learning_area, learning_trigger, learning_action)
+        rule = result.get("rule")
+        if rule and rule.get("eligible") and store.rule_policy(workspace_id)["mode"] == "autonomous" and rule["state"] == "candidate":
+            result["rule"] = store.activate_rule(rule["id"])
+            result["activation"] = "autonomous"
+        elif rule and rule.get("eligible") and store.rule_policy(workspace_id)["mode"] == "approval":
+            result["activation"] = "pending_developer_approval"
+        return result
+    return with_store(record)
+
+
+@mcp.tool()
+def forge_get_rule_proposal(rule_version_id: str) -> dict:
+    """Return the exact managed AGENTS.md diff for an eligible approval-mode rule."""
+    return with_store(lambda store: store.rule_proposal(rule_version_id))
+
+
+@mcp.tool()
+def forge_approve_rule(rule_version_id: str, developer_approved: bool) -> dict:
+    """Activate an approval-mode rule only after the developer approved its exact diff."""
+    return with_store(lambda store: store.approve_rule(rule_version_id, developer_approved))
+
+
+@mcp.tool()
+def forge_verify_rule(rule_version_id: str, result: str, evidence_span_id: str, note: str) -> dict:
+    """Record later rule evidence; a contradiction retracts the rule and rolls back Forge's managed AGENTS.md block."""
+    return with_store(lambda store: store.verify_rule(rule_version_id, result, evidence_span_id, note))
+
+
+@mcp.tool()
+def forge_get_rule_history(workspace_id: str = "default", state: str | None = None) -> list[dict]:
+    """Return versioned local rule history with citations and verification outcomes."""
+    return with_store(lambda store: store.list_rule_versions(workspace_id, state))
+
+
+@mcp.tool()
+def forge_get_learning_cards(workspace_id: str = "default", state: str | None = None) -> list[dict]:
+    """Return compact local Learning Card history and cited observations."""
+    return with_store(lambda store: store.learning_cards(workspace_id, state))
+
+
+@mcp.tool()
+def forge_get_learning_alerts(workspace_id: str = "default") -> list[dict]:
+    """Return duplicate, conflict, and overdue-review alerts for the agent to present to the developer."""
+    return with_store(lambda store: store.learning_alerts(workspace_id))
+
+
+@mcp.tool()
+def forge_review_learning_alert(alert_id: str, decision: str) -> dict:
+    """Record the developer's explicit decision: merged, kept_separate, marked_conflict, or dismissed."""
+    return with_store(lambda store: store.review_learning_alert(alert_id, decision))
 
 
 @mcp.tool()
@@ -62,6 +132,18 @@ def forge_get_session_capture_guidance() -> dict:
 def forge_get_recent_evidence(workspace_id: str = "default", limit: int = 20) -> list[dict]:
     """Return recent immutable evidence spans for the active project so an agent can cite a handoff."""
     return with_store(lambda store: store.recent_evidence_spans(workspace_id, max(1, min(limit, 50))))
+
+
+@mcp.tool()
+def forge_run_validation(label: str, command: list[str], timeout_seconds: int = 900, workspace_id: str = "default") -> dict:
+    """Run an explicit local command in the registered repository and save only safe pass/fail metadata, never raw output."""
+    return with_store(lambda store: run_validation(store, workspace_id, label, command, timeout_seconds))
+
+
+@mcp.tool()
+def forge_run_configured_validation(validation_id: str, workspace_id: str = "default") -> dict:
+    """Run one checked-in Forge validation by ID. Only these results can support Learning Cards."""
+    return with_store(lambda store: run_configured_validation(store, workspace_id, validation_id))
 
 
 @mcp.tool()

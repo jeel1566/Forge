@@ -32,7 +32,7 @@ Read the full design in [the new architecture](docs/ARCHITECTURE.md) and [the se
 
 The current code runs locally: SQLite, local Git ingestion, optional GitHub PR/review polling, a loopback dashboard/API, and an MCP server for Codex and Antigravity. It can persist cited session handoffs and pending/confirmed decisions. GitHub polling is opt-in, paginated, bounded, idempotent, and retains only safe local telemetry.
 
-The autonomous rule lifecycle, one-time policy selection, automatic rule projection, and richer failure-learning loop are the documented **v1 target**, not yet fully implemented in the current MCP/API schema. See [the implementation plan](docs/IMPLEMENTATION-PLAN.md) for the migration order.
+The first vertical slice of the rule loop is implemented: a workspace selects approval or autonomous mode, agents submit cited self-summaries with structured Learning Cards, and Forge records real local test/build results without storing command output. Two independent Forge-recorded validation results make a card eligible; Forge projects an eligible autonomous rule into its managed `AGENTS.md` block, and contradictory evidence retracts the rule and rolls the block back. Advanced pattern analysis and richer review history remain later work.
 
 ## Install and run the current local core
 
@@ -66,6 +66,7 @@ Forge contains no LangChain, LlamaIndex, OpenAI API, or GPT-5.6 integration. If 
 - [MCP and API contract](docs/API-MCP-SPEC.md)
 - [Data model](docs/DATA-MODEL.md)
 - [Codex and Antigravity setup](docs/AGENT-SETUP.md)
+- [Global agent installation and lifecycle design](docs/AGENT-LIFECYCLE-DESIGN.md)
 - [Model runtime boundaries](docs/MODEL-RUNTIME.md)
 - [Implementation plan](docs/IMPLEMENTATION-PLAN.md)
 - [Local setup](docs/OPEN-SOURCE-SETUP.md)

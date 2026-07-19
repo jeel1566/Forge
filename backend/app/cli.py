@@ -6,6 +6,7 @@ import uvicorn
 
 from .git import ingest_repository
 from .store import Store
+from .validation import run_configured_validation, run_validation
 
 
 def main():
@@ -23,6 +24,16 @@ def main():
     export.add_argument("--output", required=True, help="New JSON export path")
     doctor = subcommands.add_parser("doctor", help="Check local Forge database integrity")
     doctor.add_argument("--path", default=".", help="Repository containing the Forge database")
+    validate = subcommands.add_parser("validate", help="Run one local validation command and save safe evidence")
+    validate.add_argument("--path", default=".", help="Repository containing the Forge database")
+    validate.add_argument("--workspace", default="default")
+    validate.add_argument("--label", required=True, help="Short validation name")
+    validate.add_argument("--timeout-seconds", type=int, default=900)
+    validate.add_argument("validation_command", nargs=argparse.REMAINDER, help="Command after --")
+    configured_validate = subcommands.add_parser("validate-configured", help="Run one configured trusted validation")
+    configured_validate.add_argument("--path", default=".")
+    configured_validate.add_argument("--workspace", default="default")
+    configured_validate.add_argument("validation_id")
     args = parser.parse_args()
     database = os.environ.get("FORGE_DB_PATH", str(Path(args.path).resolve() / ".forge" / "forge.sqlite3"))
     store = Store(database)
@@ -35,6 +46,13 @@ def main():
             return
         if args.command == "doctor":
             print(store.integrity_check())
+            return
+        if args.command == "validate":
+            command = args.validation_command[1:] if args.validation_command[:1] == ["--"] else args.validation_command
+            print(run_validation(store, args.workspace, args.label, command, args.timeout_seconds))
+            return
+        if args.command == "validate-configured":
+            print(run_configured_validation(store, args.workspace, args.validation_id))
             return
         if args.command == "start":
             try:

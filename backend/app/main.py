@@ -19,6 +19,7 @@ from .worktree import git_common_dir
 from .workflow import create_candidate
 
 store = Store(os.environ.get("FORGE_DB_PATH"))
+database_request_lock = asyncio.Lock()
 
 
 @asynccontextmanager
@@ -46,6 +47,14 @@ async def local_request_guard(request, call_next):
     if request.method in {"POST", "PUT", "PATCH", "DELETE"} and origin and urlparse(origin).hostname not in {"127.0.0.1", "localhost", "::1"}:
         return JSONResponse({"detail": "Forge rejected a non-local browser request."}, status_code=403)
     return await call_next(request)
+
+
+@app.middleware("http")
+async def serialize_database_requests(request, call_next):
+    if request.url.path.startswith("/assets"):
+        return await call_next(request)
+    async with database_request_lock:
+        return await call_next(request)
 
 
 class PendingDecision(BaseModel):
@@ -119,6 +128,49 @@ class StructuredDecision(BaseModel):
     template: dict
 
 
+class RulePolicy(BaseModel):
+    mode: str = Field(pattern="^(approval|autonomous)$")
+
+
+class SessionOutcome(BaseModel):
+    agent: str = Field(min_length=1, max_length=100)
+    worktree_path: str = Field(min_length=1, max_length=1000)
+    branch: str = Field(min_length=1, max_length=255)
+    outcome_key: str = Field(min_length=1, max_length=255)
+    scope: list[str] = Field(min_length=1)
+    category: str = Field(min_length=1, max_length=100)
+    goal: str = Field(min_length=1, max_length=4000)
+    problem: str = Field(min_length=1, max_length=4000)
+    prior_approach: str = Field(min_length=1, max_length=4000)
+    why_prior_approach_failed: str = Field(min_length=1, max_length=4000)
+    alternatives: list[dict] = Field(default_factory=list)
+    chosen_fix: str = Field(min_length=1, max_length=4000)
+    rationale: str = Field(min_length=1, max_length=4000)
+    validation: str = Field(min_length=1, max_length=4000)
+    risk: str = Field(min_length=1, max_length=4000)
+    unresolved: str = Field(min_length=1, max_length=4000)
+    proposed_rule: str = Field(min_length=1, max_length=4000)
+    evidence_span_ids: list[str] = Field(min_length=1)
+    learning_card_id: str | None = Field(default=None, min_length=1)
+    learning_area: str | None = Field(default=None, max_length=200)
+    learning_trigger: str | None = Field(default=None, max_length=400)
+    learning_action: str | None = Field(default=None, max_length=400)
+
+
+class RuleApproval(BaseModel):
+    developer_approved: bool
+
+
+class RuleVerification(BaseModel):
+    result: str = Field(pattern="^(supported|contradicted|insufficient_data)$")
+    evidence_span_id: str = Field(min_length=1)
+    note: str = Field(min_length=1, max_length=4000)
+
+
+class LearningAlertReview(BaseModel):
+    decision: str = Field(pattern="^(merged|kept_separate|marked_conflict|dismissed)$")
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "forge", "database": str(store.path)}
@@ -155,6 +207,86 @@ def decisions(workspace_id: str):
 @app.get("/v1/workspaces/{workspace_id}/context")
 def context(workspace_id: str):
     return store.context(workspace_id)
+
+
+@app.get("/v1/workspaces/{workspace_id}/learning")
+def learning_context(workspace_id: str, scope: str | None = None):
+    return store.learning_context(workspace_id, scope)
+
+
+@app.put("/v1/workspaces/{workspace_id}/rule-policy")
+def configure_rule_policy(workspace_id: str, body: RulePolicy):
+    try:
+        return store.configure_rule_policy(workspace_id, body.mode)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.get("/v1/workspaces/{workspace_id}/rules")
+def rules(workspace_id: str, state: str | None = None):
+    return store.list_rule_versions(workspace_id, state)
+
+
+@app.get("/v1/workspaces/{workspace_id}/learning-cards")
+def learning_cards(workspace_id: str, state: str | None = None):
+    return store.learning_cards(workspace_id, state)
+
+
+@app.get("/v1/workspaces/{workspace_id}/learning-alerts")
+def learning_alerts(workspace_id: str):
+    return store.learning_alerts(workspace_id)
+
+
+@app.post("/v1/learning-alerts/{alert_id}/review")
+def review_learning_alert(alert_id: str, body: LearningAlertReview):
+    try:
+        return store.review_learning_alert(alert_id, body.decision)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.post("/v1/workspaces/{workspace_id}/session-outcomes", status_code=201)
+def record_session_outcome(workspace_id: str, body: SessionOutcome):
+    try:
+        result = store.record_session_outcome(workspace_id, **body.model_dump())
+        rule = result.get("rule")
+        if rule and rule.get("eligible") and store.rule_policy(workspace_id)["mode"] == "autonomous" and rule["state"] == "candidate":
+            result["rule"] = store.activate_rule(rule["id"])
+            result["activation"] = "autonomous"
+        elif rule and rule.get("eligible") and store.rule_policy(workspace_id)["mode"] == "approval":
+            result["activation"] = "pending_developer_approval"
+        return result
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.get("/v1/workspaces/{workspace_id}/session-outcomes")
+def session_outcomes(workspace_id: str, limit: int = 20):
+    return store.list_session_outcomes(workspace_id, limit)
+
+
+@app.get("/v1/rules/{rule_version_id}/proposal")
+def rule_proposal(rule_version_id: str):
+    try:
+        return store.rule_proposal(rule_version_id)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.post("/v1/rules/{rule_version_id}/approve")
+def approve_rule(rule_version_id: str, body: RuleApproval):
+    try:
+        return store.approve_rule(rule_version_id, body.developer_approved)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.post("/v1/rules/{rule_version_id}/verify")
+def verify_rule(rule_version_id: str, body: RuleVerification):
+    try:
+        return store.verify_rule(rule_version_id, **body.model_dump())
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
 
 
 @app.get("/v1/workspaces/{workspace_id}/repository")

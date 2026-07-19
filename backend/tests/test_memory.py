@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from backend.app.store import Store
@@ -54,8 +55,15 @@ class MemoryProjectionTests(unittest.TestCase):
         evidence = store.list_evidence("default")[0]
         self.assertEqual(2, len(store.get_evidence(evidence["id"])["spans"]))
         self.assertEqual(1, store.evidence_count("default", "git_commit"))
-        self.assertEqual(17, store.db.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()["version"])
+        self.assertEqual(20, store.db.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()["version"])
         self.assertTrue(store.integrity_check()["ok"])
+
+    def test_concurrent_evidence_reads_are_serialized(self):
+        store = self.store()
+        store.create_evidence("default", "git_commit", "Concurrent evidence", "diff", "Concurrent evidence", "concurrent-1", {"files": ["backend/app/store.py"]})
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            results = list(executor.map(lambda _: store.list_evidence("default"), range(40)))
+        self.assertTrue(all(result[0]["metadata"]["files"] == ["backend/app/store.py"] for result in results))
 
     def test_repository_registry_lists_multiple_workspaces(self):
         store = self.store()

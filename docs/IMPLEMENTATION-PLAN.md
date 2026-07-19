@@ -4,21 +4,15 @@
 
 Keep the existing local-first stack: Python, FastAPI, MCP, SQLite, Git, and optional read-only GitHub polling. Do not add cloud storage, background infrastructure, vector search, LangChain, or a model API. Codex and Antigravity provide the reasoning and self-summary; Forge provides the durable evidence-backed loop.
 
-## Phase 1 — Policy and schema
+## Completed vertical slice
 
-Add forward-only migrations for workspace rule policy, structured outcomes, decision records, versioned rules, evaluations, verifications, and projections. During workspace initialization ask once for `approval` or `autonomous`; persist the choice and change history.
+Forge now has forward-only migrations for workspace policy, structured outcomes, versioned rules, citations, and verification. A workspace can select approval or autonomous mode.
 
-## Phase 2 — Structured self-summary
+Agents now submit bounded, idempotent, cited self-summaries. Two independently cited outcomes with validation make a scoped rule eligible. Approval mode shows an exact diff; autonomous mode writes only Forge’s managed `AGENTS.md` block. Contradicted evidence retracts the rule and rewrites that block.
 
-Add one MCP write accepting a bounded, idempotent session outcome: scope, problem, prior approach, failure reason, alternatives, fix, verification, risk, citations, and agent identity. Add a compact context read that returns relevant rules and a capture worksheet.
+## Next — Richer verification and pattern loop
 
-## Phase 3 — Deterministic rule lifecycle
-
-Implement evidence thresholds, duplicate detection, candidate states, exact rule scopes, version history, expiration/review points, and rollback. In approval mode, produce a hash-bound diff. In autonomous mode, allow only safe managed-block projection after the same deterministic gate passes.
-
-## Phase 4 — Verification and pattern loop
-
-Connect later Git/test/review/error evidence to rules. Mark support, contradiction, or `insufficient_data`; retract contradicted rules. Require independently cited repeated observations before strengthening a reusable rule.
+Add review/expiry times, richer independent-pattern classification, and a dashboard timeline that joins outcomes, versions, and verification evidence.
 
 ## Phase 5 — Product surface and migration
 

@@ -19,24 +19,24 @@ The tools listed as **current** exist in the local implementation. The **v1 targ
 
 Current MCP never reads a transcript, returns secrets, or silently promotes a record to memory.
 
-## V1 target MCP tools
+## Implemented rule-loop MCP tools
 
 | Tool | Role |
 |---|---|
-| `forge_initialize_workspace` | Creates workspace metadata and asks once for `approval` or `autonomous` rule policy. |
+| `forge_initialize_workspace` | Persists `approval` or `autonomous` rule policy for the workspace. |
 | `forge_get_learning_context` | Returns compact active rules, relevant decisions, recent related failures, and capture prompt. |
-| `forge_record_session_outcome` | Accepts an agent's structured self-summary with citations and idempotency key. |
-| `forge_evaluate_rule_candidate` | Returns deterministic evidence/scope/duplicate evaluation. |
+| `forge_run_validation` | Runs an explicit local command in the registered repository and saves only safe pass/fail metadata; raw output is never stored. |
+| `forge_record_session_outcome` | Accepts an agent's structured self-summary, validation citations, idempotency key, and optional Learning Card fields; it evaluates and automatically projects an eligible autonomous rule. |
 | `forge_get_rule_proposal` | Returns exact managed `AGENTS.md` diff for approval mode. |
-| `forge_apply_rule_projection` | Applies only the managed rule block after policy gate and content-hash verification. |
+| `forge_approve_rule` | Applies an eligible approval-mode rule after explicit developer approval. |
 | `forge_verify_rule` | Records later supporting, contradicting, or insufficient evidence. |
-| `forge_get_rule_history` | Returns versioned provenance, state, rollback, and review time. |
+| `forge_get_rule_history` | Returns versioned provenance, state, and verification history. |
 
-All writes return stable IDs, status, timestamps, citations, and a deterministic reason. They reject secrets, raw transcripts, unsupported evidence references, and unbounded content.
+All writes return stable IDs, status, timestamps, citations, and a deterministic reason. A Learning Card uses `learning_area`, `learning_trigger`, and `learning_action`, so later outcomes can join the same observed problem despite different rule wording. Rule activation needs two different `local_validation` citations captured by Forge; an agent's written validation claim alone is insufficient. Writes reject secrets, raw transcripts, unsupported evidence references, and unbounded content.
 
 ## HTTP API direction
 
-The local API continues to serve repositories, evidence, session handoffs, GitHub status, and dashboard state. V1 adds workspace policy, rule lifecycle/history, candidate evaluation, and managed-projection endpoints. The API stays loopback-only and never becomes a public webhook receiver by default.
+The local API serves repositories, evidence, session handoffs, GitHub status, workspace policy, outcomes, rule lifecycle/history, approval diffs, and managed projection. It stays loopback-only and never becomes a public webhook receiver by default.
 
 ## GitHub safety
 

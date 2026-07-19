@@ -21,12 +21,12 @@ Forge is the shared local notebook for this repository. Codex summarises Codex w
 3. Split unrelated completed changes into separate cited handoffs and submit them with `forge_record_session_contexts`.
 4. Use `forge_record_decision` only for a reusable evidence-backed decision; use `forge_record_reflection` for a non-durable observation.
 
-Current Forge writes are review-first. Do not claim that a pending handoff or decision is active memory.
+For the new rule loop, call `forge_get_learning_context` first. At session end, call `forge_run_validation` for the real test/build command, then use its returned span with `forge_record_session_outcome`. Submit a Learning Card (`learning_area`, `learning_trigger`, and `learning_action`) or reuse a pending `learning_card_id`; do not rely on matching sentence wording. Two independently cited Forge-recorded validation results make a scoped rule eligible. In autonomous mode, Forge updates only its managed `AGENTS.md` block; in approval mode, call `forge_get_rule_proposal`, show the exact diff, and only then call `forge_approve_rule` after an explicit yes.
 
 ## Rule safety
 
-The current implementation requires a developer-approved `AGENTS.md` handoff. Do not write `AGENTS.md` until the exact proposed diff has been shown and approved. Never auto-merge, resolve conflicts, expose secrets, or treat a chat claim as evidence.
+Never auto-merge, resolve conflicts, expose secrets, or treat a chat claim as evidence. When later evidence contradicts an active rule, call `forge_verify_rule`; Forge retracts it and rolls back only its managed rule block.
 
-## V1 target
+## Current vertical slice
 
-The documented new Forge design adds workspace-level `approval` and `autonomous` rule policies, deterministic evidence gates, managed rule projection, verification, and rollback. Do not call target-only tools or assume automatic rule writing until they exist in the installed MCP server.
+Workspace policy, Learning Cards, Forge-recorded validation evidence, the two-outcome gate, approval/autonomous projection, and contradiction rollback are available. Advanced repetition analysis and richer rule review screens remain future work.

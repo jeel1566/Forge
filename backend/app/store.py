@@ -1,6 +1,7 @@
 import json
 import random
 import sqlite3
+from threading import RLock
 from hashlib import sha256
 from difflib import unified_diff
 from datetime import UTC, datetime, timedelta
@@ -20,6 +21,7 @@ class Store:
         self.path = Path(path or ".forge/forge.sqlite3")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.path, check_same_thread=False, timeout=5)
+        self._connection_lock = RLock()
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys = ON")
         self.db.execute("PRAGMA journal_mode = WAL")
@@ -211,11 +213,95 @@ class Store:
             );
             CREATE INDEX IF NOT EXISTS github_sync_events_retention_index ON github_sync_events(occurred_at);
             CREATE INDEX IF NOT EXISTS github_sync_events_workspace_index ON github_sync_events(workspace_id, occurred_at DESC);
+            """), (18, """
+            CREATE TABLE IF NOT EXISTS workspace_rule_policies (
+                workspace_id TEXT PRIMARY KEY REFERENCES repositories(workspace_id),
+                mode TEXT NOT NULL CHECK(mode IN ('approval', 'autonomous')),
+                configured_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS session_outcomes (
+                id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES repositories(workspace_id),
+                agent TEXT NOT NULL, worktree_path TEXT NOT NULL, branch TEXT NOT NULL,
+                outcome_key TEXT NOT NULL, scope_json TEXT NOT NULL, category TEXT NOT NULL,
+                goal TEXT NOT NULL, problem TEXT NOT NULL, prior_approach TEXT NOT NULL,
+                why_prior_approach_failed TEXT NOT NULL, alternatives_json TEXT NOT NULL,
+                chosen_fix TEXT NOT NULL, rationale TEXT NOT NULL, validation TEXT NOT NULL,
+                risk TEXT NOT NULL, unresolved TEXT NOT NULL, proposed_rule TEXT NOT NULL,
+                created_at TEXT NOT NULL, UNIQUE(workspace_id, outcome_key)
+            );
+            CREATE TABLE IF NOT EXISTS session_outcome_citations (
+                session_outcome_id TEXT NOT NULL REFERENCES session_outcomes(id),
+                span_id TEXT NOT NULL REFERENCES evidence_spans(id),
+                PRIMARY KEY(session_outcome_id, span_id)
+            );
+            CREATE TABLE IF NOT EXISTS rule_versions (
+                id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES repositories(workspace_id),
+                rule_key TEXT NOT NULL, version INTEGER NOT NULL, statement TEXT NOT NULL,
+                scope_json TEXT NOT NULL, category TEXT NOT NULL,
+                state TEXT NOT NULL CHECK(state IN ('candidate', 'active', 'retracted')),
+                activation_mode TEXT NOT NULL CHECK(activation_mode IN ('approval', 'autonomous')),
+                source_outcome_id TEXT NOT NULL REFERENCES session_outcomes(id),
+                previous_version_id TEXT REFERENCES rule_versions(id),
+                evaluation_reason TEXT NOT NULL, created_at TEXT NOT NULL,
+                activated_at TEXT, retracted_at TEXT, projection_hash TEXT,
+                UNIQUE(workspace_id, rule_key, version)
+            );
+            CREATE TABLE IF NOT EXISTS rule_version_citations (
+                rule_version_id TEXT NOT NULL REFERENCES rule_versions(id),
+                span_id TEXT NOT NULL REFERENCES evidence_spans(id),
+                PRIMARY KEY(rule_version_id, span_id)
+            );
+            CREATE TABLE IF NOT EXISTS rule_verifications (
+                id TEXT PRIMARY KEY, rule_version_id TEXT NOT NULL REFERENCES rule_versions(id),
+                result TEXT NOT NULL CHECK(result IN ('supported', 'contradicted', 'insufficient_data')),
+                evidence_span_id TEXT NOT NULL REFERENCES evidence_spans(id),
+                note TEXT NOT NULL, created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS rule_versions_workspace_index ON rule_versions(workspace_id, state, created_at DESC);
+            CREATE INDEX IF NOT EXISTS session_outcomes_workspace_index ON session_outcomes(workspace_id, created_at DESC);
+            """), (19, """
+            ALTER TABLE session_outcomes ADD COLUMN learning_area TEXT;
+            ALTER TABLE session_outcomes ADD COLUMN learning_trigger TEXT;
+            ALTER TABLE session_outcomes ADD COLUMN learning_action TEXT;
+            ALTER TABLE rule_versions ADD COLUMN learning_area TEXT;
+            ALTER TABLE rule_versions ADD COLUMN learning_trigger TEXT;
+            ALTER TABLE rule_versions ADD COLUMN learning_action TEXT;
+            CREATE INDEX IF NOT EXISTS rule_versions_learning_index ON rule_versions(workspace_id, learning_area, learning_trigger, learning_action, state);
+            """), (20, """
+            CREATE TABLE IF NOT EXISTS learning_cards (
+                id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES repositories(workspace_id),
+                rule_key TEXT NOT NULL, scope_json TEXT NOT NULL, area TEXT, trigger TEXT, action TEXT,
+                state TEXT NOT NULL CHECK(state IN ('observed', 'watching', 'supported', 'ready', 'active', 'verified', 'contradicted', 'retracted', 'archived')),
+                rule_version_id TEXT REFERENCES rule_versions(id), review_due_at TEXT,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(workspace_id, rule_key)
+            );
+            CREATE TABLE IF NOT EXISTS learning_card_observations (
+                card_id TEXT NOT NULL REFERENCES learning_cards(id), outcome_id TEXT NOT NULL REFERENCES session_outcomes(id),
+                span_id TEXT NOT NULL REFERENCES evidence_spans(id), created_at TEXT NOT NULL,
+                PRIMARY KEY(card_id, outcome_id, span_id)
+            );
+            CREATE TABLE IF NOT EXISTS learning_card_alerts (
+                id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES repositories(workspace_id),
+                card_id TEXT NOT NULL REFERENCES learning_cards(id), related_card_id TEXT REFERENCES learning_cards(id),
+                kind TEXT NOT NULL CHECK(kind IN ('possible_duplicate', 'possible_conflict', 'review_due')),
+                status TEXT NOT NULL CHECK(status IN ('pending', 'merged', 'kept_separate', 'marked_conflict', 'dismissed')),
+                created_at TEXT NOT NULL, resolved_at TEXT, UNIQUE(card_id, related_card_id, kind)
+            );
+            CREATE INDEX IF NOT EXISTS learning_cards_workspace_index ON learning_cards(workspace_id, state, review_due_at);
             """)]
         for version, migration in migrations:
             if version not in applied:
                 self.db.executescript(migration)
                 self.db.execute("INSERT INTO schema_migrations VALUES (?, ?)", (version, now()))
+        self.db.commit()
+        self._backfill_learning_cards()
+
+    def _backfill_learning_cards(self):
+        rows = self.db.execute("SELECT id, workspace_id, rule_key, scope_json, learning_area, learning_trigger, learning_action, state, created_at, activated_at FROM rule_versions").fetchall()
+        for row in rows:
+            card_state = {"candidate": "watching", "active": "active", "retracted": "retracted"}[row["state"]]
+            due = (datetime.fromisoformat(row["activated_at"]) + timedelta(days=90)).isoformat() if row["activated_at"] else None
+            self.db.execute("INSERT OR IGNORE INTO learning_cards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (str(uuid4()), row["workspace_id"], row["rule_key"], row["scope_json"], row["learning_area"], row["learning_trigger"], row["learning_action"], card_state, row["id"], due, row["created_at"], now()))
         self.db.commit()
 
     def close(self):
@@ -241,7 +327,7 @@ class Store:
         target = Path(path)
         if target.exists():
             raise FileExistsError(f"Export already exists: {target}")
-        tables = ("repositories", "evidence_items", "evidence_spans", "decisions", "decision_citations", "decision_scopes", "reflections", "intentions", "project_memory_entries", "session_contexts", "session_context_citations", "session_context_files", "session_context_scopes", "agent_work_sessions", "worktrees", "connector_state", "github_poll_settings", "agents_guardrail_handoffs")
+        tables = ("repositories", "evidence_items", "evidence_spans", "decisions", "decision_citations", "decision_scopes", "reflections", "intentions", "project_memory_entries", "session_contexts", "session_context_citations", "session_context_files", "session_context_scopes", "agent_work_sessions", "worktrees", "connector_state", "github_poll_settings", "agents_guardrail_handoffs", "workspace_rule_policies", "session_outcomes", "session_outcome_citations", "rule_versions", "rule_version_citations", "rule_verifications")
         data = {table: [dict(row) for row in self.db.execute(f"SELECT * FROM {table}")] for table in tables}
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -306,39 +392,60 @@ class Store:
         self.db.commit()
 
     def create_evidence(self, workspace_id: str, kind: str, title: str, content: str, quote: str, external_id: str | None = None, metadata: dict | None = None, spans: list[str] | None = None):
-        existing = None
-        if external_id:
-            existing = self.db.execute("SELECT id FROM evidence_items WHERE workspace_id=? AND kind=? AND external_id=?", (workspace_id, kind, external_id)).fetchone()
-        if existing:
-            return self.db.execute("SELECT id FROM evidence_spans WHERE evidence_id=?", (existing["id"],)).fetchone()["id"]
-        evidence_id, span_id = str(uuid4()), str(uuid4())
-        self.db.execute("INSERT INTO evidence_items VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (evidence_id, workspace_id, kind, external_id, title, content, json.dumps(metadata or {}), now()))
-        for span in dict.fromkeys([quote, *(spans or [])]):
-            self.db.execute("INSERT INTO evidence_spans VALUES (?, ?, ?, ?)", (span_id if span == quote else str(uuid4()), evidence_id, span, now()))
-        self.db.commit()
-        return span_id
+        with self._connection_lock:
+            existing = None
+            if external_id:
+                existing = self.db.execute("SELECT id FROM evidence_items WHERE workspace_id=? AND kind=? AND external_id=?", (workspace_id, kind, external_id)).fetchone()
+            if existing:
+                return self.db.execute("SELECT id FROM evidence_spans WHERE evidence_id=?", (existing["id"],)).fetchone()["id"]
+            evidence_id, span_id = str(uuid4()), str(uuid4())
+            self.db.execute("INSERT INTO evidence_items VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (evidence_id, workspace_id, kind, external_id, title, content, json.dumps(metadata or {}), now()))
+            for span in dict.fromkeys([quote, *(spans or [])]):
+                self.db.execute("INSERT INTO evidence_spans VALUES (?, ?, ?, ?)", (span_id if span == quote else str(uuid4()), evidence_id, span, now()))
+            self.db.commit()
+            return span_id
+
+    def record_validation_result(self, workspace_id: str, label: str, status: str, exit_code: int | None, duration_ms: int, command_name: str, command_digest: str, trusted: bool = False, config_hash: str | None = None):
+        if status not in {"passed", "failed", "timed_out", "unavailable"}:
+            raise ValueError("Unsupported validation status.")
+        if not self.repository(workspace_id):
+            raise ValueError("Repository is not registered.")
+        label = self._outcome_text(label, "validation label", 200)
+        command_name = self._outcome_text(command_name, "validation command", 200)
+        if duration_ms < 0:
+            raise ValueError("Validation duration cannot be negative.")
+        run_id = str(uuid4())
+        title = f"Validation {status}: {label}"
+        quote = f"{label}: {status}" + (f" (exit {exit_code})" if exit_code is not None else "")
+        span_id = self.create_evidence(
+            workspace_id, "local_validation", title, quote, quote, run_id,
+            {"captured_by": "forge", "trusted": trusted, "config_hash": config_hash, "status": status, "exit_code": exit_code, "duration_ms": duration_ms, "command_name": command_name, "command_digest": command_digest},
+        )
+        return {"span_id": span_id, "label": label, "status": status, "exit_code": exit_code, "duration_ms": duration_ms}
 
     def has_evidence(self, workspace_id: str, kind: str, external_id: str) -> bool:
         return bool(self.db.execute("SELECT 1 FROM evidence_items WHERE workspace_id=? AND kind=? AND external_id=?", (workspace_id, kind, external_id)).fetchone())
 
     def list_evidence(self, workspace_id: str, kind: str = "git_commit", limit: int = 20):
-        rows = self.db.execute(
-            "SELECT id, kind, external_id, title, metadata, created_at FROM evidence_items WHERE workspace_id=? AND kind=? ORDER BY created_at DESC LIMIT ?",
-            (workspace_id, kind, limit),
-        ).fetchall()
-        return [{**dict(row), "metadata": json.loads(row["metadata"])} for row in rows]
+        with self._connection_lock:
+            rows = self.db.execute(
+                "SELECT id, kind, external_id, title, metadata, created_at FROM evidence_items WHERE workspace_id=? AND kind=? ORDER BY created_at DESC LIMIT ?",
+                (workspace_id, kind, limit),
+            ).fetchall()
+            return [{**dict(row), "metadata": json.loads(row["metadata"] or "{}")} for row in rows]
 
     def evidence_count(self, workspace_id: str, kind: str) -> int:
         return self.db.execute("SELECT COUNT(*) AS count FROM evidence_items WHERE workspace_id=? AND kind=?", (workspace_id, kind)).fetchone()["count"]
 
     def get_evidence(self, evidence_id: str):
-        row = self.db.execute("SELECT * FROM evidence_items WHERE id=?", (evidence_id,)).fetchone()
-        if not row:
-            return None
-        evidence = dict(row)
-        evidence["metadata"] = json.loads(evidence["metadata"])
-        evidence["spans"] = [dict(span) for span in self.db.execute("SELECT id, quote, created_at FROM evidence_spans WHERE evidence_id=?", (evidence_id,)).fetchall()]
-        return evidence
+        with self._connection_lock:
+            row = self.db.execute("SELECT * FROM evidence_items WHERE id=?", (evidence_id,)).fetchone()
+            if not row:
+                return None
+            evidence = dict(row)
+            evidence["metadata"] = json.loads(evidence["metadata"] or "{}")
+            evidence["spans"] = [dict(span) for span in self.db.execute("SELECT id, quote, created_at FROM evidence_spans WHERE evidence_id=?", (evidence_id,)).fetchall()]
+            return evidence
 
     def recent_evidence_spans(self, workspace_id: str, limit: int = 20):
         rows = self.db.execute(
@@ -607,7 +714,14 @@ class Store:
     def context(self, workspace_id: str):
         rows = self.db.execute("SELECT id, decision_id FROM project_memory_entries WHERE workspace_id=? AND superseded_at IS NULL ORDER BY created_at DESC LIMIT 12", (workspace_id,)).fetchall()
         memory = [{**self.get_decision(row["decision_id"]), "memory_entry_id": row["id"]} for row in rows]
-        return {"workspace_id": workspace_id, "memory": memory, "active_intention": self.active_intention(workspace_id), "recent_session_context": self.list_session_contexts(workspace_id, "approved", limit=3)}
+        return {
+            "workspace_id": workspace_id,
+            "memory": memory,
+            "active_intention": self.active_intention(workspace_id),
+            "recent_session_outcomes": self.list_session_outcomes(workspace_id, limit=3),
+            "recent_session_context": self.list_session_contexts(workspace_id, "approved", limit=3),
+            "pending_rule_candidates": self.list_rule_versions(workspace_id, "candidate"),
+        }
 
     def archive_memory(self, entry_id: str):
         result = self.db.execute("UPDATE project_memory_entries SET superseded_at=? WHERE id=? AND superseded_at IS NULL", (now(), entry_id))
@@ -618,7 +732,7 @@ class Store:
         pending = next((item for item in self.list_decisions(workspace_id) if item["review_status"] == "pending"), None)
         context = self.context(workspace_id)
         pending_contexts = self.list_session_contexts(workspace_id, "pending", limit=20)
-        return {"workspace_id": workspace_id, "intention": self.active_intention(workspace_id), "memory": context["memory"][:1], "recent_session_context": context["recent_session_context"], "pending_decision": pending, "pending_reflection": self.pending_reflection(workspace_id), "pending_session_context": pending_contexts[0] if pending_contexts else None, "pending_session_contexts": pending_contexts}
+        return {"workspace_id": workspace_id, "intention": self.active_intention(workspace_id), "memory": context["memory"][:1], "recent_session_outcomes": context["recent_session_outcomes"], "recent_session_context": context["recent_session_context"], "pending_rule_candidates": context["pending_rule_candidates"], "pending_decision": pending, "pending_reflection": self.pending_reflection(workspace_id), "pending_session_context": pending_contexts[0] if pending_contexts else None, "pending_session_contexts": pending_contexts}
 
     def guardrail_candidates(self, workspace_id: str):
         rows = self.db.execute(
@@ -857,3 +971,368 @@ class Store:
         self.set_connector_state("github", kind, error)
         self.db.commit()
         return self.github_poll_status(workspace_id)
+
+    def rule_policy(self, workspace_id: str):
+        row = self.db.execute("SELECT * FROM workspace_rule_policies WHERE workspace_id=?", (workspace_id,)).fetchone()
+        return {**dict(row), "configured": True} if row else {"workspace_id": workspace_id, "mode": None, "configured": False}
+
+    def configure_rule_policy(self, workspace_id: str, mode: str):
+        if mode not in {"approval", "autonomous"}:
+            raise ValueError("Rule policy must be approval or autonomous.")
+        if not self.repository(workspace_id):
+            raise ValueError("Repository is not registered.")
+        timestamp = now()
+        self.db.execute(
+            "INSERT INTO workspace_rule_policies VALUES (?, ?, ?, ?) ON CONFLICT(workspace_id) DO UPDATE SET mode=excluded.mode, updated_at=excluded.updated_at",
+            (workspace_id, mode, timestamp, timestamp),
+        )
+        self.db.commit()
+        return self.rule_policy(workspace_id)
+
+    @staticmethod
+    def _outcome_text(value: str, field: str, maximum: int = 4000) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError(f"{field} is required.")
+        if len(normalized) > maximum:
+            raise ValueError(f"{field} must be at most {maximum} characters.")
+        return normalized
+
+    def _rule_key(self, scope: list[str], category: str, statement: str, learning_area: str | None = None, learning_trigger: str | None = None, learning_action: str | None = None) -> str:
+        normalized_scope = sorted({item.strip() for item in scope if item.strip()})
+        if learning_area and learning_trigger and learning_action:
+            value = ["learning-card", normalized_scope, learning_area.strip().lower(), learning_trigger.strip().lower(), learning_action.strip().lower()]
+        else:
+            value = ["legacy-rule", normalized_scope, category.strip().lower(), statement.strip().lower()]
+        return sha256(json.dumps(value, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+    def _rule_outcome_count(self, workspace_id: str, rule_key: str) -> int:
+        rows = self.db.execute("SELECT id, scope_json, category, proposed_rule, validation, learning_area, learning_trigger, learning_action FROM session_outcomes WHERE workspace_id=?", (workspace_id,)).fetchall()
+        matching_ids = [
+            row["id"] for row in rows
+            if self._rule_key(json.loads(row["scope_json"]), row["category"], row["proposed_rule"], row["learning_area"], row["learning_trigger"], row["learning_action"]) == rule_key
+            and row["proposed_rule"] != "none"
+            and row["validation"].strip().lower() not in {"unknown", "not_run"}
+        ]
+        if not matching_ids:
+            return 0
+        placeholders = ",".join("?" for _ in matching_ids)
+        rows = self.db.execute(
+            f"SELECT DISTINCT c.span_id, e.metadata FROM session_outcome_citations c JOIN evidence_spans s ON s.id=c.span_id JOIN evidence_items e ON e.id=s.evidence_id WHERE c.session_outcome_id IN ({placeholders}) AND e.kind='local_validation'",
+            matching_ids,
+        ).fetchall()
+        return sum(1 for row in rows if json.loads(row["metadata"] or "{}").get("trusted") is True)
+
+    def _rule_version(self, rule_version_id: str):
+        row = self.db.execute("SELECT * FROM rule_versions WHERE id=?", (rule_version_id,)).fetchone()
+        if not row:
+            return None
+        value = dict(row)
+        value["scope"] = json.loads(value.pop("scope_json"))
+        value["citations"] = [dict(item) for item in self.db.execute(
+            "SELECT s.id AS span_id, e.id AS evidence_id, e.kind, e.title, s.quote FROM rule_version_citations c JOIN evidence_spans s ON s.id=c.span_id JOIN evidence_items e ON e.id=s.evidence_id WHERE c.rule_version_id=?",
+            (rule_version_id,),
+        ).fetchall()]
+        value["verifications"] = [dict(item) for item in self.db.execute("SELECT * FROM rule_verifications WHERE rule_version_id=? ORDER BY created_at DESC", (rule_version_id,)).fetchall()]
+        return value
+
+    def _rule_progress(self, rule: dict | None):
+        if not rule:
+            return None
+        evidence_count = self._rule_outcome_count(rule["workspace_id"], rule["rule_key"])
+        rule["evidence_count"] = evidence_count
+        rule["required_evidence_count"] = 2
+        rule["eligible"] = evidence_count >= rule["required_evidence_count"]
+        if rule["state"] == "candidate":
+            rule["next_action"] = "Ready for activation." if rule["eligible"] else "Waiting for another outcome with a different cited local validation result."
+        elif rule["state"] == "active":
+            rule["next_action"] = "Active in Forge's managed AGENTS.md block; later evidence can verify or retract it."
+        else:
+            rule["next_action"] = "Retracted rules are not served as active context."
+        return rule
+
+    def _card_for_rule(self, rule_version_id: str):
+        row = self.db.execute("SELECT * FROM learning_cards WHERE rule_version_id=?", (rule_version_id,)).fetchone()
+        return dict(row) if row else None
+
+    def _ensure_learning_card(self, rule: dict, outcome_id: str, span_ids: list[str]):
+        card = self._card_for_rule(rule["id"])
+        if not card:
+            card_id = str(uuid4())
+            card_state = {"candidate": "watching", "active": "active", "retracted": "retracted"}[rule["state"]]
+            self.db.execute("INSERT INTO learning_cards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (card_id, rule["workspace_id"], rule["rule_key"], json.dumps(rule["scope"]), rule.get("learning_area"), rule.get("learning_trigger"), rule.get("learning_action"), card_state, rule["id"], None, now(), now()))
+            card = dict(self.db.execute("SELECT * FROM learning_cards WHERE id=?", (card_id,)).fetchone())
+            others = self.db.execute("SELECT * FROM learning_cards WHERE workspace_id=? AND id<>?", (rule["workspace_id"], card_id)).fetchall()
+            for other in others:
+                if other["scope_json"] != card["scope_json"] or not card["area"] or card["area"] != other["area"]:
+                    continue
+                kind = "possible_conflict" if card["trigger"] == other["trigger"] and card["action"] != other["action"] else "possible_duplicate" if card["action"] == other["action"] else None
+                if kind:
+                    self.db.execute("INSERT OR IGNORE INTO learning_card_alerts VALUES (?, ?, ?, ?, ?, 'pending', ?, NULL)", (str(uuid4()), rule["workspace_id"], card_id, other["id"], kind, now()))
+        self.db.executemany("INSERT OR IGNORE INTO learning_card_observations VALUES (?, ?, ?, ?)", [(card["id"], outcome_id, span_id, now()) for span_id in span_ids])
+        supported = self._rule_outcome_count(rule["workspace_id"], rule["rule_key"])
+        self.db.execute("UPDATE learning_cards SET state=?, updated_at=? WHERE id=?", ("ready" if supported >= 2 else "watching", now(), card["id"]))
+        return card
+
+    def learning_cards(self, workspace_id: str, state: str | None = None):
+        query, params = "SELECT * FROM learning_cards WHERE workspace_id=?", [workspace_id]
+        if state:
+            query += " AND state=?"
+            params.append(state)
+        cards = []
+        for row in self.db.execute(query + " ORDER BY updated_at DESC", params).fetchall():
+            card = dict(row)
+            card["scope"] = json.loads(card.pop("scope_json"))
+            card["alerts"] = [dict(alert) for alert in self.db.execute("SELECT * FROM learning_card_alerts WHERE card_id=? AND status='pending'", (card["id"],)).fetchall()]
+            card["observations"] = [dict(item) for item in self.db.execute("SELECT outcome_id, span_id, created_at FROM learning_card_observations WHERE card_id=? ORDER BY created_at", (card["id"],)).fetchall()]
+            cards.append(card)
+        return cards
+
+    def learning_alerts(self, workspace_id: str):
+        alerts = [dict(row) for row in self.db.execute("SELECT * FROM learning_card_alerts WHERE workspace_id=? AND status='pending' ORDER BY created_at", (workspace_id,)).fetchall()]
+        for card in self.db.execute("SELECT id, review_due_at FROM learning_cards WHERE workspace_id=? AND state IN ('active', 'verified') AND review_due_at IS NOT NULL AND review_due_at<?", (workspace_id, now())).fetchall():
+            alerts.append({"id": f"review_due:{card['id']}", "card_id": card["id"], "related_card_id": None, "kind": "review_due", "status": "pending", "created_at": card["review_due_at"]})
+        return alerts
+
+    def cleanup_unreferenced_validation_evidence(self, workspace_id: str, older_than_days: int = 90):
+        cutoff = (datetime.now(UTC) - timedelta(days=older_than_days)).isoformat()
+        rows = self.db.execute("SELECT e.id FROM evidence_items e WHERE e.workspace_id=? AND e.kind='local_validation' AND e.created_at<? AND NOT EXISTS (SELECT 1 FROM session_outcome_citations c JOIN evidence_spans s ON s.id=c.span_id WHERE s.evidence_id=e.id) AND NOT EXISTS (SELECT 1 FROM rule_verifications v JOIN evidence_spans s ON s.id=v.evidence_span_id WHERE s.evidence_id=e.id)", (workspace_id, cutoff)).fetchall()
+        self.db.executemany("DELETE FROM evidence_items WHERE id=?", [(row["id"],) for row in rows])
+        self.db.commit()
+        return {"deleted": len(rows)}
+
+    def review_learning_alert(self, alert_id: str, decision: str):
+        if decision not in {"merged", "kept_separate", "marked_conflict", "dismissed"}:
+            raise ValueError("Unsupported Learning Card review decision.")
+        alert = self.db.execute("SELECT * FROM learning_card_alerts WHERE id=? AND status='pending'", (alert_id,)).fetchone()
+        if not alert:
+            raise ValueError("Pending Learning Card alert not found.")
+        if decision == "merged" and alert["related_card_id"]:
+            self.db.execute("INSERT OR IGNORE INTO learning_card_observations SELECT ?, outcome_id, span_id, created_at FROM learning_card_observations WHERE card_id=?", (alert["card_id"], alert["related_card_id"]))
+            self.db.execute("UPDATE learning_cards SET state='archived', updated_at=? WHERE id=?", (now(), alert["related_card_id"]))
+        self.db.execute("UPDATE learning_card_alerts SET status=?, resolved_at=? WHERE id=?", (decision, now(), alert_id))
+        self.db.commit()
+        return {"id": alert_id, "decision": decision}
+
+    def list_rule_versions(self, workspace_id: str, state: str | None = None):
+        query = "SELECT id FROM rule_versions WHERE workspace_id=?"
+        params: list[str] = [workspace_id]
+        if state:
+            query += " AND state=?"
+            params.append(state)
+        query += " ORDER BY created_at DESC"
+        return [self._rule_progress(self._rule_version(row["id"])) for row in self.db.execute(query, params).fetchall()]
+
+    def record_session_outcome(self, workspace_id: str, agent: str, worktree_path: str, branch: str, outcome_key: str, scope: list[str], category: str, goal: str, problem: str, prior_approach: str, why_prior_approach_failed: str, alternatives: list[dict], chosen_fix: str, rationale: str, validation: str, risk: str, unresolved: str, proposed_rule: str, evidence_span_ids: list[str], learning_card_id: str | None = None, learning_area: str | None = None, learning_trigger: str | None = None, learning_action: str | None = None):
+        if not self.repository(workspace_id):
+            raise ValueError("Repository is not registered.")
+        if not scope or not all(isinstance(item, str) and item.strip() for item in scope):
+            raise ValueError("scope must contain at least one non-empty item.")
+        span_ids = self._workspace_span_ids(workspace_id, evidence_span_ids)
+        fields = {
+            "agent": self._outcome_text(agent, "agent", 100), "worktree_path": self._outcome_text(worktree_path, "worktree_path", 1000),
+            "branch": self._outcome_text(branch, "branch", 255), "outcome_key": self._outcome_text(outcome_key, "outcome_key", 255),
+            "category": self._outcome_text(category, "category", 100), "goal": self._outcome_text(goal, "goal"),
+            "problem": self._outcome_text(problem, "problem"), "prior_approach": self._outcome_text(prior_approach, "prior_approach"),
+            "why_prior_approach_failed": self._outcome_text(why_prior_approach_failed, "why_prior_approach_failed"),
+            "chosen_fix": self._outcome_text(chosen_fix, "chosen_fix"), "rationale": self._outcome_text(rationale, "rationale"),
+            "validation": self._outcome_text(validation, "validation"), "risk": self._outcome_text(risk, "risk"),
+            "unresolved": self._outcome_text(unresolved, "unresolved"), "proposed_rule": self._outcome_text(proposed_rule, "proposed_rule"),
+        }
+        card_fields = {
+            "learning_area": self._outcome_text(learning_area, "learning_area", 200) if learning_area else None,
+            "learning_trigger": self._outcome_text(learning_trigger, "learning_trigger", 400) if learning_trigger else None,
+            "learning_action": self._outcome_text(learning_action, "learning_action", 400) if learning_action else None,
+        }
+        if any(card_fields.values()) and not all(card_fields.values()):
+            raise ValueError("learning_area, learning_trigger, and learning_action are required together.")
+        if learning_card_id:
+            existing_card = self._rule_version(learning_card_id)
+            if not existing_card or existing_card["workspace_id"] != workspace_id or existing_card["state"] not in {"candidate", "active"}:
+                raise ValueError("Learning Card is not available in this workspace.")
+            rule_key = existing_card["rule_key"]
+            card_fields = {key: existing_card[key] for key in card_fields}
+        else:
+            rule_key = self._rule_key(scope, fields["category"], fields["proposed_rule"], **card_fields)
+        existing = self.db.execute("SELECT id FROM session_outcomes WHERE workspace_id=? AND outcome_key=?", (workspace_id, fields["outcome_key"])).fetchone()
+        if existing:
+            return {"outcome": self.get_session_outcome(existing["id"]), "idempotent": True, "rule": None}
+        outcome_id = str(uuid4())
+        self.db.execute(
+            "INSERT INTO session_outcomes (id, workspace_id, agent, worktree_path, branch, outcome_key, scope_json, category, goal, problem, prior_approach, why_prior_approach_failed, alternatives_json, chosen_fix, rationale, validation, risk, unresolved, proposed_rule, created_at, learning_area, learning_trigger, learning_action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (outcome_id, workspace_id, fields["agent"], fields["worktree_path"], fields["branch"], fields["outcome_key"], json.dumps(sorted(set(scope))), fields["category"], fields["goal"], fields["problem"], fields["prior_approach"], fields["why_prior_approach_failed"], json.dumps(alternatives), fields["chosen_fix"], fields["rationale"], fields["validation"], fields["risk"], fields["unresolved"], fields["proposed_rule"], now(), card_fields["learning_area"], card_fields["learning_trigger"], card_fields["learning_action"]),
+        )
+        self.db.executemany("INSERT INTO session_outcome_citations VALUES (?, ?)", [(outcome_id, span_id) for span_id in span_ids])
+        rule = None
+        if fields["proposed_rule"].lower() != "none":
+            existing_rule = self.db.execute("SELECT id FROM rule_versions WHERE workspace_id=? AND rule_key=? AND state IN ('candidate', 'active') ORDER BY version DESC LIMIT 1", (workspace_id, rule_key)).fetchone()
+            if existing_rule:
+                self.db.executemany("INSERT OR IGNORE INTO rule_version_citations VALUES (?, ?)", [(existing_rule["id"], span_id) for span_id in span_ids])
+                rule = self._rule_version(existing_rule["id"])
+            else:
+                rule_id = str(uuid4())
+                policy = self.rule_policy(workspace_id)["mode"] or "approval"
+                self.db.execute("INSERT INTO rule_versions (id, workspace_id, rule_key, version, statement, scope_json, category, state, activation_mode, source_outcome_id, previous_version_id, evaluation_reason, created_at, activated_at, retracted_at, projection_hash, learning_area, learning_trigger, learning_action) VALUES (?, ?, ?, 1, ?, ?, ?, 'candidate', ?, ?, NULL, ?, ?, NULL, NULL, NULL, ?, ?, ?)", (rule_id, workspace_id, rule_key, fields["proposed_rule"], json.dumps(sorted(set(scope))), fields["category"], policy, outcome_id, "Waiting for two independently cited Forge validation results.", now(), card_fields["learning_area"], card_fields["learning_trigger"], card_fields["learning_action"]))
+                self.db.executemany("INSERT INTO rule_version_citations VALUES (?, ?)", [(rule_id, span_id) for span_id in span_ids])
+                rule = self._rule_version(rule_id)
+        self.db.commit()
+        if rule:
+            card = self._ensure_learning_card(rule, outcome_id, span_ids)
+            self.db.commit()
+            rule = self._rule_progress(rule)
+            rule["learning_card_id"] = card["id"]
+        return {"outcome": self.get_session_outcome(outcome_id), "idempotent": False, "rule": rule}
+
+    def get_session_outcome(self, outcome_id: str):
+        row = self.db.execute("SELECT * FROM session_outcomes WHERE id=?", (outcome_id,)).fetchone()
+        if not row:
+            return None
+        value = dict(row)
+        value["scope"] = json.loads(value.pop("scope_json"))
+        value["alternatives"] = json.loads(value.pop("alternatives_json"))
+        value["citations"] = [dict(item) for item in self.db.execute(
+            "SELECT s.id AS span_id, e.id AS evidence_id, e.kind, e.title, s.quote FROM session_outcome_citations c JOIN evidence_spans s ON s.id=c.span_id JOIN evidence_items e ON e.id=s.evidence_id WHERE c.session_outcome_id=?",
+            (outcome_id,),
+        ).fetchall()]
+        return value
+
+    def list_session_outcomes(self, workspace_id: str, limit: int = 20):
+        rows = self.db.execute("SELECT id FROM session_outcomes WHERE workspace_id=? ORDER BY created_at DESC LIMIT ?", (workspace_id, max(1, min(limit, 100)))).fetchall()
+        return [self.get_session_outcome(row["id"]) for row in rows]
+
+    def _workspace_agents_path(self, workspace_id: str) -> Path:
+        repository = self.repository(workspace_id)
+        if not repository:
+            raise ValueError("Repository is not registered.")
+        return Path(repository["path"]).resolve() / "AGENTS.md"
+
+    def _render_managed_rules(self, rules: list[dict]) -> str:
+        lines = ["<!-- forge:rules:start -->", "## Forge Active Rules", ""]
+        lines.extend(f"- [{', '.join(rule['scope'])}] {rule['statement']}" for rule in rules)
+        lines.extend(["", "<!-- forge:rules:end -->", ""])
+        return "\n".join(lines)
+
+    def _replace_managed_rules(self, current: str, block: str) -> str:
+        start, end = "<!-- forge:rules:start -->", "<!-- forge:rules:end -->"
+        has_start, has_end = start in current, end in current
+        if has_start != has_end:
+            raise ValueError("AGENTS.md has an incomplete Forge managed rule block.")
+        if has_start:
+            before = current.split(start, 1)[0]
+            after = current.split(end, 1)[1]
+            return before.rstrip() + "\n\n" + block + after.lstrip()
+        return current.rstrip() + ("\n\n" if current.strip() else "") + block
+
+    def _project_active_rules(self, workspace_id: str) -> str:
+        target = self._workspace_agents_path(workspace_id)
+        current = target.read_text(encoding="utf-8") if target.exists() else ""
+        active = self.list_rule_versions(workspace_id, "active")
+        target_content = self._replace_managed_rules(current, self._render_managed_rules(active))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_suffix(".tmp")
+        temporary.write_text(target_content, encoding="utf-8")
+        temporary.replace(target)
+        return self._content_hash(target_content)
+
+    def activate_rule(self, rule_version_id: str):
+        rule = self._rule_version(rule_version_id)
+        if not rule or rule["state"] != "candidate":
+            raise ValueError("Candidate rule not found.")
+        policy = self.rule_policy(rule["workspace_id"])
+        if policy["mode"] != "autonomous":
+            raise ValueError("Only autonomous workspaces can activate a rule without approval.")
+        if self._rule_outcome_count(rule["workspace_id"], rule["rule_key"]) < 2:
+            raise ValueError("A rule needs two independently cited, verified outcomes before activation.")
+        card = self._card_for_rule(rule_version_id)
+        if card and self.db.execute("SELECT 1 FROM learning_card_alerts WHERE card_id=? AND kind IN ('possible_duplicate', 'possible_conflict') AND status='pending'", (card["id"],)).fetchone():
+            raise ValueError("Resolve pending Learning Card duplicate/conflict alerts before activation.")
+        self.db.execute("UPDATE rule_versions SET state='active', activated_at=?, evaluation_reason=? WHERE id=?", (now(), "Two independently cited outcomes with validation met the autonomous activation gate.", rule_version_id))
+        if card:
+            self.db.execute("UPDATE learning_cards SET state='active', review_due_at=?, updated_at=? WHERE id=?", ((datetime.now(UTC) + timedelta(days=90)).isoformat(), now(), card["id"]))
+        self.db.commit()
+        try:
+            projection_hash = self._project_active_rules(rule["workspace_id"])
+        except OSError as error:
+            self.db.execute("UPDATE rule_versions SET state='candidate', activated_at=NULL WHERE id=?", (rule_version_id,))
+            self.db.commit()
+            raise ValueError(f"Could not update the managed AGENTS.md block: {error}") from error
+        self.db.execute("UPDATE rule_versions SET projection_hash=? WHERE id=?", (projection_hash, rule_version_id))
+        self.db.commit()
+        return self._rule_version(rule_version_id)
+
+    def rule_proposal(self, rule_version_id: str):
+        rule = self._rule_version(rule_version_id)
+        if not rule or rule["state"] != "candidate":
+            raise ValueError("Candidate rule not found.")
+        if self.rule_policy(rule["workspace_id"])["mode"] != "approval":
+            raise ValueError("Rule proposals are only used in approval workspaces.")
+        if self._rule_outcome_count(rule["workspace_id"], rule["rule_key"]) < 2:
+            raise ValueError("A rule needs two independently cited, verified outcomes before approval.")
+        target = self._workspace_agents_path(rule["workspace_id"])
+        current = target.read_text(encoding="utf-8") if target.exists() else ""
+        proposed = self._replace_managed_rules(current, self._render_managed_rules([*self.list_rule_versions(rule["workspace_id"], "active"), rule]))
+        return {
+            "rule_version_id": rule_version_id, "target_agents_path": str(target), "diff": "".join(unified_diff(current.splitlines(keepends=True), proposed.splitlines(keepends=True), fromfile="AGENTS.md", tofile="AGENTS.md")),
+            "status": "pending_developer_approval",
+        }
+
+    def approve_rule(self, rule_version_id: str, developer_approved: bool):
+        if not developer_approved:
+            raise ValueError("Developer approval is required to activate a rule in approval mode.")
+        rule = self._rule_version(rule_version_id)
+        if not rule or rule["state"] != "candidate":
+            raise ValueError("Candidate rule not found.")
+        if self.rule_policy(rule["workspace_id"])["mode"] != "approval":
+            raise ValueError("Use autonomous activation for this workspace.")
+        if self._rule_outcome_count(rule["workspace_id"], rule["rule_key"]) < 2:
+            raise ValueError("A rule needs two independently cited, verified outcomes before approval.")
+        card = self._card_for_rule(rule_version_id)
+        if card and self.db.execute("SELECT 1 FROM learning_card_alerts WHERE card_id=? AND kind IN ('possible_duplicate', 'possible_conflict') AND status='pending'", (card["id"],)).fetchone():
+            raise ValueError("Resolve pending Learning Card duplicate/conflict alerts before approval.")
+        self.db.execute("UPDATE rule_versions SET state='active', activated_at=?, evaluation_reason=? WHERE id=?", (now(), "Developer approved the exact managed AGENTS.md projection after the evidence gate passed.", rule_version_id))
+        if card:
+            self.db.execute("UPDATE learning_cards SET state='active', review_due_at=?, updated_at=? WHERE id=?", ((datetime.now(UTC) + timedelta(days=90)).isoformat(), now(), card["id"]))
+        self.db.commit()
+        try:
+            projection_hash = self._project_active_rules(rule["workspace_id"])
+        except OSError as error:
+            self.db.execute("UPDATE rule_versions SET state='candidate', activated_at=NULL WHERE id=?", (rule_version_id,))
+            self.db.commit()
+            raise ValueError(f"Could not update the managed AGENTS.md block: {error}") from error
+        self.db.execute("UPDATE rule_versions SET projection_hash=? WHERE id=?", (projection_hash, rule_version_id))
+        self.db.commit()
+        return self._rule_version(rule_version_id)
+
+    def verify_rule(self, rule_version_id: str, result: str, evidence_span_id: str, note: str):
+        if result not in {"supported", "contradicted", "insufficient_data"}:
+            raise ValueError("Verification result is invalid.")
+        rule = self._rule_version(rule_version_id)
+        if not rule:
+            raise ValueError("Rule not found.")
+        self._workspace_span_ids(rule["workspace_id"], [evidence_span_id])
+        self.db.execute("INSERT INTO rule_verifications VALUES (?, ?, ?, ?, ?, ?)", (str(uuid4()), rule_version_id, result, evidence_span_id, self._outcome_text(note, "note"), now()))
+        card = self._card_for_rule(rule_version_id)
+        if card and result == "supported":
+            self.db.execute("UPDATE learning_cards SET state='verified', updated_at=? WHERE id=?", (now(), card["id"]))
+        if result == "contradicted" and rule["state"] == "active":
+            self.db.execute("UPDATE rule_versions SET state='retracted', retracted_at=? WHERE id=?", (now(), rule_version_id))
+            if card:
+                self.db.execute("UPDATE learning_cards SET state='contradicted', updated_at=? WHERE id=?", (now(), card["id"]))
+            self.db.commit()
+            projection_hash = self._project_active_rules(rule["workspace_id"])
+            self.db.execute("UPDATE rule_versions SET projection_hash=? WHERE id=?", (projection_hash, rule_version_id))
+            if card:
+                self.db.execute("UPDATE learning_cards SET state='retracted', updated_at=? WHERE id=?", (now(), card["id"]))
+        self.db.commit()
+        return self._rule_version(rule_version_id)
+
+    def learning_context(self, workspace_id: str, scope: str | None = None):
+        rules = self.list_rule_versions(workspace_id, "active")
+        candidates = self.list_rule_versions(workspace_id, "candidate")
+        if scope:
+            rules = [rule for rule in rules if scope in rule["scope"]]
+            candidates = [rule for rule in candidates if scope in rule["scope"]]
+        return {
+            "workspace_id": workspace_id, "policy": self.rule_policy(workspace_id), "active_rules": rules, "pending_rule_candidates": candidates, "learning_cards": self.learning_cards(workspace_id), "learning_alerts": self.learning_alerts(workspace_id),
+            "capture_prompt": "Summarize your own session: goal, problem with citation, prior approach, why it failed, alternatives, chosen fix, validation, risk, unresolved work, and one scoped proposed rule or none.",
+        }

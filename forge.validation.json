@@ -1,0 +1,7 @@
+{
+  "validations": [
+    {"id": "backend-tests", "argv": ["python", "-m", "unittest", "discover", "-s", "backend/tests", "-v"], "scopes": ["backend"], "categories": ["testing"], "timeout_seconds": 900},
+    {"id": "frontend-build", "argv": ["pnpm", "--dir", "frontend", "build"], "scopes": ["frontend"], "categories": ["testing"], "timeout_seconds": 900},
+    {"id": "diff-check", "argv": ["git", "diff", "--check"], "scopes": ["repository"], "categories": ["testing"], "timeout_seconds": 120}
+  ]
+}
