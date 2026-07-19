@@ -85,6 +85,17 @@ class MCPServerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "worktree_path"):
             mcp_server.forge_complete_session("session-1", {"agent": "codex"})
 
+    def test_start_dashboard_uses_the_registered_workspace(self):
+        store = Store(self.database)
+        store.register_repository("default", str(Path(self.temporary_directory.name)))
+        store.close()
+        runtime = MagicMock()
+        runtime.start_dashboard.return_value = {"status": "ready", "url": "http://127.0.0.1:43123"}
+        with patch.dict(os.environ, {"FORGE_DB_PATH": str(self.database)}), patch("backend.app.mcp_server.ForgeRuntime", return_value=runtime):
+            result = mcp_server.forge_start_dashboard()
+        self.assertEqual("http://127.0.0.1:43123", result["url"])
+        runtime.start_dashboard.assert_called_once_with(self.database, "default")
+
     def test_complete_session_saves_handoff_and_marks_runtime_lease(self):
         store = Store(self.database)
         store.register_repository("default", ".")

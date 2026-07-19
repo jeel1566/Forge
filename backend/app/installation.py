@@ -32,11 +32,18 @@ def _replace_block(current: str, block: str | None) -> str:
 
 
 def _instructions(agent: str) -> str:
+    dashboard_instruction = (
+        "For Codex, call `forge_start_dashboard` through Forge MCP after session start when a local dashboard is wanted; it is owned by the persistent MCP process, never by a one-shot shell command."
+        if agent == "codex"
+        else "For Antigravity, install the repository dashboard sidecar once with `forge install antigravity --path .`; it is owned by Antigravity, never by a one-shot shell command."
+    )
     return "\n".join((
         MANAGED_START,
         "## Forge local project memory",
         f"At the start of meaningful work, run `forge session-start --path . --agent {agent}`, then call `forge_get_session_start_context` through Forge MCP.",
+        dashboard_instruction,
         f"At session start, retain the `session_id` returned by Forge. When the developer types `/forge_end`, use the installed Forge End skill. It runs configured checks, calls `forge_complete_session` with that session ID, reports alerts, then releases that exact lease.",
+        "When asked about prior work, call `forge_get_latest_session_handoff` and answer only from that persisted record. If no handoff exists, say so; never reconstruct Forge history by reading project files, generated reports, Git status, diffs, or history.",
         "Never send raw chat transcripts, secrets, command output, or GitHub credentials to Forge. If Forge is offline, continue normally and say shared context is unavailable.",
         f"This block is managed only by `forge install {agent}` and `forge uninstall {agent}`.",
         MANAGED_END,
@@ -160,6 +167,26 @@ def _remove_antigravity_sidecar(repository: Path, dry_run: bool) -> dict:
             pass
     _write(settings_path, json.dumps(settings, indent=2) + "\n", dry_run)
     return {"id": sidecar_id, "config": str(sidecar_path), "removed": True}
+
+
+def antigravity_sidecar_status(repository: Path) -> dict:
+    sidecar_id = _sidecar_id(repository)
+    path = _sidecar_path(repository)
+    try:
+        document = json.loads(_read(path))
+    except json.JSONDecodeError:
+        return {"state": "invalid", "id": sidecar_id, "config": str(path)}
+    if not document:
+        return {"state": "missing", "id": sidecar_id, "config": str(path)}
+    try:
+        _, settings = _antigravity_settings()
+    except ValueError:
+        return {"state": "invalid", "id": sidecar_id, "config": str(path)}
+    args = document.get("args") if isinstance(document, dict) else []
+    port = args[args.index("--port") + 1] if isinstance(args, list) and "--port" in args and args.index("--port") + 1 < len(args) else None
+    enabled = settings.get("sidecars", {}).get(sidecar_id, {}).get("enabled") is True
+    valid = isinstance(document, dict) and document.get("command") == "forge" and isinstance(port, str)
+    return {"state": "enabled" if valid and enabled else "disabled" if valid else "invalid", "id": sidecar_id, "config": str(path), "port": int(port) if isinstance(port, str) and port.isdigit() else None, "enabled": enabled}
 
 
 def _end_skill(agent: str) -> str:

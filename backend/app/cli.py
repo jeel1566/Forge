@@ -7,7 +7,7 @@ from pathlib import Path
 import uvicorn
 
 from .git import ingest_repository
-from .installation import agent_status, install_agent, repair_agent, uninstall_agent
+from .installation import agent_status, antigravity_sidecar_status, install_agent, repair_agent, uninstall_agent
 from .runtime import ForgeRuntime
 from .store import Store
 from .validation import run_configured_validation, run_validation
@@ -49,7 +49,8 @@ def _doctor(repository: Path, database: Path, agent: str | None) -> dict:
         finally:
             store.close()
     agents = [agent_status(item) for item in (("codex", "antigravity") if agent in {None, "all"} else (agent,))]
-    return {"repository": str(repository), "database": database_status, "validation_config": _validation_config_status(repository), "runtime": runtime.status(database), "agents": agents}
+    sidecar = antigravity_sidecar_status(repository) if agent in {"antigravity", "all"} else None
+    return {"repository": str(repository), "database": database_status, "validation_config": _validation_config_status(repository), "runtime": runtime.status(database), "agents": agents, "dashboard_sidecar": sidecar}
 
 
 def main():
@@ -152,7 +153,7 @@ def main():
             except ValueError:
                 store.register_repository(args.workspace, str(repository_path))
             if args.command == "session-start":
-                runtime = ForgeRuntime(repository_path).start_or_reuse(store.path, args.workspace, args.agent)
+                runtime = ForgeRuntime(repository_path).start_lease(store.path, args.agent)
                 print({"workspace_id": args.workspace, "database": str(store.path), **runtime})
                 return
             os.environ["FORGE_DB_PATH"] = database

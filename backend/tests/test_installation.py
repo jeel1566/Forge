@@ -112,6 +112,7 @@ class AgentInstallationTests(unittest.TestCase):
             main()
         result = ast.literal_eval(output.getvalue().strip())
         self.assertEqual("missing", result["database"]["state"])
+        self.assertIsNone(result["dashboard_sidecar"])
         self.assertFalse((repository / ".forge" / "forge.sqlite3").exists())
 
 

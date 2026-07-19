@@ -34,7 +34,7 @@ Forge never reads or stores raw chat transcripts. The agent creates the handover
 
 Each project has an independent local Forge database. Multiple Codex and Antigravity tasks have separate session-ID leases while safely sharing that database. The dashboard is optional: an Antigravity project sidecar owns a repository's loopback dashboard process and restart behavior; it is not a child of an agent shell command.
 
-Install that sidecar with `forge install antigravity --path .`, then restart Antigravity so it discovers it. The sidecar receives a dedicated port generated during installation. `forge start --path .` remains the explicit foreground dashboard command for Codex until a Codex host-lifecycle adapter is available. The MCP server and database remain local-only.
+Install that sidecar with `forge install antigravity --path .`, then restart Antigravity so it discovers it. The sidecar receives a dedicated port generated during installation. Codex calls `forge_start_dashboard` through its persistent Forge MCP process after starting a lease; that MCP process owns the loopback dashboard until the final Forge lease ends. The MCP server and database remain local-only.
 
 ## Safety requirements
 

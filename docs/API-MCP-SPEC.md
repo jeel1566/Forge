@@ -15,6 +15,7 @@ The tools listed as **current** exist in the local implementation. The **v1 targ
 | `forge_get_worktree_delta` / `forge_get_coordination_status` | Returns local Git facts and exact overlap warnings. |
 | `forge_record_session_handoff` | Saves one canonical cited agent-supplied handoff without ending a runtime lease. |
 | `forge_heartbeat_session` | Refreshes one active session-ID lease without storing chat content. |
+| `forge_start_dashboard` | Starts or reuses the loopback dashboard under the persistent Forge MCP process and returns its local URL. |
 | `forge_complete_session` | Saves the handoff, marks its exact session-ID lease complete, and returns persisted alerts before `forge session-end`. |
 | `forge_record_decision` / `forge_record_reflection` | Saves a pending cited proposal or reflection. |
 | `forge_get_github_sync_status` | Returns safe persisted GitHub sync health and telemetry. |

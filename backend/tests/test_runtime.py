@@ -42,6 +42,26 @@ class ForgeRuntimeTests(unittest.TestCase):
         self.assertTrue(result["reused"])
         process.assert_not_called()
 
+    @patch("backend.app.runtime.subprocess.Popen")
+    def test_lease_only_session_never_launches_a_dashboard_process(self, process):
+        first = self.runtime.start_lease(self.database, "codex")
+        second = self.runtime.start_lease(self.database, "antigravity")
+        metadata = self.runtime._read()
+        self.assertEqual("not_required", first["server"])
+        self.assertTrue(second["reused"])
+        self.assertEqual("lease_only", self.runtime.status(self.database)["state"])
+        self.assertEqual({"codex", "antigravity"}, {lease["agent"] for lease in metadata["leases"].values()})
+        process.assert_not_called()
+
+    @patch("backend.app.runtime.subprocess.Popen")
+    def test_managed_dashboard_preserves_existing_leases(self, process):
+        self.runtime._write({"version": 3, "mode": "lease_only", "database": str(self.database.resolve()), "leases": {"session-1": {"agent": "codex", "expires_at": "2999-01-01T00:00:00+00:00"}}})
+        process.return_value = MagicMock(pid=1234)
+        with patch.object(self.runtime, "_available_port", return_value=43123), patch.object(self.runtime, "_wait_for_health", return_value=True):
+            dashboard = self.runtime.start_dashboard(self.database, "workspace")
+        self.assertEqual("http://127.0.0.1:43123", dashboard["url"])
+        self.assertIn("session-1", self.runtime._read()["leases"])
+
     def test_last_lease_stops_process_and_removes_metadata(self):
         self.runtime._write({"version": 2, "instance_id": "instance-1", "pid": 1234, "port": 43123, "database": str(self.database), "leases": {"session-1": {"agent": "codex", "expires_at": "2999-01-01T00:00:00+00:00", "handoff_id": "handoff-1"}}})
         with patch.object(self.runtime, "_healthy", return_value=True), patch("backend.app.runtime._process_is_alive", return_value=True), patch.object(self.runtime, "_stop_process") as stop:

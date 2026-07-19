@@ -37,7 +37,9 @@ For a dashboard that survives Antigravity command completion, install the projec
 forge install antigravity --path .
 ```
 
-The command creates one Forge-owned Antigravity sidecar configuration, enables only that sidecar, and prints its loopback URL. Fully restart Antigravity once so it discovers the new sidecar. The sidecar owns and restarts the dashboard process; Forge never uses a detached child of an agent shell command for this purpose. Use `forge start --path .` for a foreground dashboard in Codex until Codex exposes an installable host-lifecycle adapter.
+The command creates one Forge-owned Antigravity sidecar configuration, enables only that sidecar, and prints its loopback URL. Fully restart Antigravity once so it discovers the new sidecar. The sidecar owns and restarts the dashboard process; Forge never uses a detached child of an agent shell command for this purpose.
+
+For Codex, the installed start instruction calls `forge_start_dashboard` through Forge MCP after the session lease is created. The persistent MCP process owns the loopback dashboard, so it survives the one-shot agent shell command and is released after the final Forge lease ends.
 
 Keep the returned `session_id`. At the end of the agent session, the Forge End skill completes and releases that exact lease:
 

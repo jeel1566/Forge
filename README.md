@@ -50,7 +50,7 @@ Install Forge for one agent at a time using [agent setup](docs/AGENT-SETUP.md). 
 
 ## GPT-5.6 and Codex
 
-`forge session-start` creates or reuses one local session lease for that repository and returns a unique `session_id`. MCP reads and writes the local SQLite database directly. For Antigravity, the repository sidecar owns the dashboard server; for Codex, use `forge start --path .` when you want a dashboard until a Codex host-lifecycle adapter is available.
+`forge session-start` creates or reuses one local session lease for that repository and returns a unique `session_id`. MCP reads and writes the local SQLite database directly. For Antigravity, the repository sidecar owns the dashboard server. For Codex, the agent calls `forge_start_dashboard` through the persistent Forge MCP process, which owns the loopback dashboard for the session.
 
 Forge contains no LangChain, LlamaIndex, OpenAI API, or GPT-5.6 integration. If Codex is configured to use GPT-5.6, the model is the agent that writes the structured session summary and calls MCP; Forge treats it like any other agent and stores only the submitted summary and cited local evidence. See [model runtime boundaries](docs/MODEL-RUNTIME.md).
 

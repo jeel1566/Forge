@@ -7,13 +7,16 @@ description: Use Forge's local shared project memory at the start and end of a c
 
 Forge is the shared local notebook for this repository. Codex summarises Codex work; Antigravity summarises Antigravity work. Do not ask one agent to summarise the other and do not read, scrape, or upload a raw chat transcript.
 
+When asked about previous work, call `forge_get_latest_session_handoff` and answer only from that persisted handoff. If none exists, state that no saved handoff is available. Never reconstruct Forge history from source files, generated Markdown, Git status, diffs, or commits.
+
 ## Session start
 
 1. When the global Forge installation is active, run `forge session-start --path . --agent codex` or `--agent antigravity` and retain the returned `session_id`.
-2. Call `forge_get_session_start_context` for the active workspace.
-3. Treat returned cited decisions, active rules, alerts, and latest Session Handoff as project context; do not invent missing memory.
-4. For meaningful work, call `forge_start_work_session` with the active worktree and heartbeat the retained session around longer work.
-5. If Forge is offline, say so briefly and continue normal work without shared context.
+2. In Codex, call `forge_start_dashboard` if a local dashboard is wanted; its persistent Forge MCP process owns the loopback server. In Antigravity, use the repository sidecar installed by `forge install antigravity --path .`.
+3. Call `forge_get_session_start_context` for the active workspace.
+4. Treat returned cited decisions, active rules, alerts, and latest Session Handoff as project context; do not invent missing memory.
+5. For meaningful work, call `forge_start_work_session` with the active worktree and heartbeat the retained session around longer work.
+6. If Forge is offline, say so briefly and continue normal work without shared context.
 
 ## Session end
 

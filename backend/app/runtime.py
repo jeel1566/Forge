@@ -79,6 +79,8 @@ class ForgeRuntime:
         runtime = self._read()
         if not runtime:
             return {"state": "absent"}
+        if runtime.get("mode") == "lease_only":
+            return {"state": "lease_only", "lease_count": len(runtime.get("leases", {}))}
         database_path = Path(database).resolve()
         port, instance_id = runtime.get("port"), runtime.get("instance_id")
         healthy = bool(port and instance_id and self._healthy(int(port), database_path, instance_id))
@@ -172,32 +174,61 @@ class ForgeRuntime:
             if not _is_expired(lease.get("expires_at"))
         }
 
+    def start_lease(self, database: str | Path, agent: str) -> dict:
+        database_path = Path(database).resolve()
+        with self._lock():
+            runtime = self._read()
+            self._prune_leases(runtime)
+            if runtime.get("database") != str(database_path):
+                runtime = {"version": 3, "mode": "lease_only", "database": str(database_path), "leases": {}}
+            reused = bool(runtime.get("leases"))
+            session_id = str(uuid4())
+            runtime["leases"][session_id] = {"agent": agent, "started_at": _timestamp(), "last_heartbeat_at": _timestamp(), "expires_at": _expires_at()}
+            self._write(runtime)
+            return {"status": "ready", "reused": reused, "server": "managed" if runtime.get("port") else "not_required", "session_id": session_id, "lease_expires_at": runtime["leases"][session_id]["expires_at"]}
+
+    def _ensure_server(self, runtime: dict, database_path: Path, workspace_id: str) -> tuple[dict, bool]:
+        reused = bool(runtime.get("port") and runtime.get("instance_id") and self._healthy(int(runtime["port"]), database_path, runtime["instance_id"]))
+        if reused:
+            return runtime, True
+        port = self._available_port()
+        instance_id = str(uuid4())
+        environment = os.environ.copy()
+        environment["FORGE_DB_PATH"] = str(database_path)
+        environment["FORGE_RUNTIME_INSTANCE_ID"] = instance_id
+        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        process = subprocess.Popen(
+            [sys.executable, "-m", "backend.app.cli", "start", "--path", str(self.repository), "--port", str(port), "--workspace", workspace_id],
+            cwd=self.repository,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags,
+        )
+        if not self._wait_for_health(port, database_path, instance_id):
+            process.terminate()
+            raise RuntimeError("Forge dashboard did not become healthy; continue without it.")
+        return {"version": 2, "instance_id": instance_id, "pid": process.pid, "port": port, "database": str(database_path), "started_at": _timestamp(), "leases": runtime.get("leases", {})}, False
+
+    def start_dashboard(self, database: str | Path, workspace_id: str) -> dict:
+        database_path = Path(database).resolve()
+        with self._lock():
+            runtime = self._read()
+            self._prune_leases(runtime)
+            if runtime.get("database") != str(database_path):
+                runtime = {"version": 3, "mode": "lease_only", "database": str(database_path), "leases": {}}
+            runtime, reused = self._ensure_server(runtime, database_path, workspace_id)
+            runtime["last_health_at"] = _timestamp()
+            self._write(runtime)
+            return {"status": "ready", "reused": reused, "pid": runtime["pid"], "port": runtime["port"], "url": f"http://127.0.0.1:{runtime['port']}"}
+
     def start_or_reuse(self, database: str | Path, workspace_id: str, agent: str) -> dict:
         database_path = Path(database).resolve()
         with self._lock():
             runtime = self._read()
             self._prune_leases(runtime)
-            reused = bool(runtime.get("port") and runtime.get("instance_id") and self._healthy(int(runtime["port"]), database_path, runtime["instance_id"]))
-            if not reused:
-                port = self._available_port()
-                instance_id = str(uuid4())
-                environment = os.environ.copy()
-                environment["FORGE_DB_PATH"] = str(database_path)
-                environment["FORGE_RUNTIME_INSTANCE_ID"] = instance_id
-                creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                process = subprocess.Popen(
-                    [sys.executable, "-m", "backend.app.cli", "start", "--path", str(self.repository), "--port", str(port), "--workspace", workspace_id],
-                    cwd=self.repository,
-                    env=environment,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    creationflags=creationflags,
-                )
-                if not self._wait_for_health(port, database_path, instance_id):
-                    process.terminate()
-                    raise RuntimeError("Forge did not become healthy; continue without shared context.")
-                runtime = {"version": 2, "instance_id": instance_id, "pid": process.pid, "port": port, "database": str(database_path), "started_at": _timestamp(), "leases": {}}
+            runtime, reused = self._ensure_server(runtime, database_path, workspace_id)
             runtime["last_health_at"] = _timestamp()
             session_id = str(uuid4())
             runtime.setdefault("leases", {})[session_id] = {"agent": agent, "started_at": _timestamp(), "last_heartbeat_at": _timestamp(), "expires_at": _expires_at()}

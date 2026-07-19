@@ -133,6 +133,17 @@ def forge_heartbeat_session(session_id: str) -> dict:
 
 
 @mcp.tool()
+def forge_start_dashboard(workspace_id: str = "default") -> dict:
+    """Start or reuse the local loopback dashboard under the persistent Forge MCP process."""
+    def start(store: Store) -> dict:
+        repository = store.repository(workspace_id)
+        if not repository:
+            raise ValueError("Repository is not registered.")
+        return ForgeRuntime(repository["path"]).start_dashboard(store.path, workspace_id)
+    return with_store(start)
+
+
+@mcp.tool()
 def forge_list_learning_cards(workspace_id: str = "default", state: str | None = None) -> list[dict]:
     """List persisted Learning Cards with observations, linked rule versions, and pending alerts."""
     return with_store(lambda store: store.learning_cards(workspace_id, state))
