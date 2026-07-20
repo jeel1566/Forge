@@ -13,6 +13,27 @@ from .worktree import inspect_worktree
 mcp = FastMCP("Forge")
 Result = TypeVar("Result")
 
+CHATGPT_READ_ONLY_TOOLS = (
+    "forge_get_session_start_context",
+    "forge_get_latest_session_handoff",
+    "forge_get_session_handoff",
+    "forge_list_work_items",
+    "forge_get_work_item",
+    "forge_list_incidents",
+    "forge_list_learning_cases",
+    "forge_get_learning_case",
+    "forge_search_vault",
+    "forge_list_learning_cards",
+    "forge_get_learning_card",
+    "forge_get_learning_alerts",
+    "forge_get_rule_history",
+    "forge_list_reusable_rules",
+    "forge_get_recent_evidence",
+    "forge_retrieve_decisions",
+    "forge_get_github_sync_status",
+    "forge_get_coordination_status",
+)
+
 
 def current_store() -> Store:
     configured = os.environ.get("FORGE_DB_PATH")
@@ -59,6 +80,66 @@ def forge_get_session_handoff(handoff_id: str) -> dict:
     return with_store(lambda store: store.get_session_handoff(handoff_id) or {"status": "not_found"})
 
 
+@mcp.tool()
+def forge_start_work_item(work_item_key: str, agent: str, worktree_path: str, branch: str, goal: str, scope: list[str], session_id: str | None = None, area: str | None = None, workspace_id: str = "default") -> dict:
+    """Start one bounded piece of work inside an agent session. Retrying the same work_item_key is safe."""
+    return with_store(lambda store: store.start_work_item(workspace_id, session_id, work_item_key, agent, worktree_path, branch, goal, scope, area))
+
+
+@mcp.tool()
+def forge_finish_work_item(work_item_id: str, status: str, summary: str, rationale: str, validation: str, risk: str, unresolved: str, evidence_span_ids: list[str], workspace_id: str = "default") -> dict:
+    """Finish or abandon one Work Item with cited, transcript-free local facts."""
+    return with_store(lambda store: store.finish_work_item(workspace_id, work_item_id, status, summary, rationale, validation, risk, unresolved, evidence_span_ids))
+
+
+@mcp.tool()
+def forge_list_work_items(workspace_id: str = "default", session_id: str | None = None, status: str | None = None, limit: int = 50) -> list[dict]:
+    """List compact persisted Work Items for this project or session."""
+    return with_store(lambda store: store.list_work_items(workspace_id, session_id, status, limit))
+
+
+@mcp.tool()
+def forge_get_work_item(work_item_id: str) -> dict:
+    """Return one persisted Work Item with its safe citations."""
+    return with_store(lambda store: store.get_work_item(work_item_id) or {"status": "not_found"})
+
+
+@mcp.tool()
+def forge_capture_incident(work_item_id: str, observation_key: str, kind: str, scope: list[str], area: str, trigger: str, observed_fact: str, hypothesis: str, counterexample: str, next_action: str, confidence: str, evidence_span_ids: list[str], workspace_id: str = "default") -> dict:
+    """Capture one cited technical, workflow, or decision-pattern incident without reading a transcript."""
+    return with_store(lambda store: store.capture_learning_observation(workspace_id, work_item_id, observation_key, kind, scope, area, trigger, observed_fact, hypothesis, counterexample, next_action, confidence, evidence_span_ids))
+
+
+@mcp.tool()
+def forge_list_incidents(workspace_id: str = "default", work_item_id: str | None = None, kind: str | None = None, limit: int = 50) -> list[dict]:
+    """List persisted cited incident reports. Facts, hypotheses, and counterexamples stay distinct."""
+    return with_store(lambda store: store.list_learning_observations(workspace_id, work_item_id, kind, limit))
+
+
+@mcp.tool()
+def forge_list_learning_cases(workspace_id: str = "default", state: str | None = None, limit: int = 50) -> list[dict]:
+    """List deterministic Learning Cases. A case becomes proposed only after two independent Work Items."""
+    return with_store(lambda store: store.list_learning_cases(workspace_id, state, limit))
+
+
+@mcp.tool()
+def forge_get_learning_case(case_id: str) -> dict:
+    """Return one Learning Case and its cited incident timeline."""
+    return with_store(lambda store: store.get_learning_case(case_id) or {"status": "not_found"})
+
+
+@mcp.tool()
+def forge_search_vault(query: str, workspace_id: str = "default", scope: str | None = None, file_path: str | None = None, limit: int = 20) -> list[dict]:
+    """Search persisted local vault records. Generated Markdown is never searched as evidence."""
+    return with_store(lambda store: store.search_vault(workspace_id, query, scope, file_path, limit))
+
+
+@mcp.tool()
+def forge_export_vault(workspace_id: str = "default") -> dict:
+    """Generate deterministic project-local vault documentation from SQLite facts."""
+    return with_store(lambda store: store.export_vault(workspace_id))
+
+
 def _record_handoff(store: Store, workspace_id: str, payload: dict) -> dict:
     result = store.record_session_handoff(workspace_id, **payload)
     rule = result.get("rule")
@@ -98,7 +179,7 @@ def _runtime_for(store: Store) -> ForgeRuntime:
 
 
 @mcp.tool()
-def forge_record_session_handoff(agent: str, worktree_path: str, branch: str, outcome_key: str, scope: list[str], category: str, goal: str, problem: str, prior_approach: str, why_prior_approach_failed: str, alternatives: list[dict], chosen_fix: str, rationale: str, validation: str, risk: str, unresolved: str, proposed_rule: str, evidence_span_ids: list[str], learning_card_id: str | None = None, learning_area: str | None = None, learning_trigger: str | None = None, learning_action: str | None = None, workspace_id: str = "default") -> dict:
+def forge_record_session_handoff(agent: str, worktree_path: str, branch: str, outcome_key: str, scope: list[str], category: str, goal: str, problem: str, prior_approach: str, why_prior_approach_failed: str, alternatives: list[dict], chosen_fix: str, rationale: str, validation: str, risk: str, unresolved: str, proposed_rule: str, evidence_span_ids: list[str], learning_card_id: str | None = None, learning_area: str | None = None, learning_trigger: str | None = None, learning_action: str | None = None, work_item_id: str | None = None, workspace_id: str = "default") -> dict:
     """Record an agent-authored, transcript-free Session Handoff without releasing an agent lease."""
     payload = locals().copy()
     payload.pop("workspace_id")
@@ -188,6 +269,42 @@ def forge_approve_rule(rule_version_id: str, developer_approved: bool) -> dict:
 
 
 @mcp.tool()
+def forge_request_reusable_rule(rule_version_id: str) -> dict:
+    """Record one active local rule as reusable evidence. Two distinct repositories are required before approval."""
+    return with_store(lambda store: store.request_reusable_rule(rule_version_id))
+
+
+@mcp.tool()
+def forge_list_reusable_rules(workspace_id: str = "default", scope: str | None = None) -> list[dict]:
+    """Return active reusable rules effective for this project, including any project override."""
+    return with_store(lambda store: store.reusable_rules(workspace_id, scope))
+
+
+@mcp.tool()
+def forge_list_reusable_rule_requests(state: str = "pending") -> list[dict]:
+    """List globally local reusable-rule requests awaiting review or active history."""
+    return with_store(lambda store: store.reusable_rule_requests(state))
+
+
+@mcp.tool()
+def forge_approve_reusable_rule(reusable_rule_id: str, developer_approved: bool) -> dict:
+    """Activate a pending reusable rule only after explicit developer approval."""
+    return with_store(lambda store: store.approve_reusable_rule(reusable_rule_id, developer_approved))
+
+
+@mcp.tool()
+def forge_override_reusable_rule(reusable_rule_id: str, action: str, statement: str | None = None, workspace_id: str = "default") -> dict:
+    """Set a local project override. replace wins in compact context; ignore suppresses this reusable rule locally."""
+    return with_store(lambda store: store.set_reusable_rule_override(workspace_id, reusable_rule_id, action, statement))
+
+
+@mcp.tool()
+def forge_record_session_feedback(handoff_id: str, context_useful: str, irrelevant_or_missing: str, rule_assessment: str, workspace_id: str = "default") -> dict:
+    """Save only explicit developer feedback as cited local review data; it is never hidden model training."""
+    return with_store(lambda store: store.record_session_feedback(workspace_id, handoff_id, context_useful, irrelevant_or_missing, rule_assessment))
+
+
+@mcp.tool()
 def forge_verify_rule(rule_version_id: str, result: str, evidence_span_id: str, note: str) -> dict:
     """Record later configured-validation evidence that verifies or contradicts an active rule."""
     return with_store(lambda store: store.verify_rule(rule_version_id, result, evidence_span_id, note))
@@ -270,6 +387,30 @@ def forge_get_worktree_delta(worktree_path: str, base_commit: str | None = None)
 def forge_get_coordination_status(workspace_id: str = "default") -> dict:
     """Return local worktree coordination facts and overlap warnings."""
     return with_store(lambda store: coordination_status(store, workspace_id))
+
+
+def chatgpt_http_server(port: int = 8765) -> FastMCP:
+    """Build the loopback-only, read-only Streamable HTTP server for ChatGPT."""
+    server = FastMCP(
+        "Forge Local Memory",
+        instructions=(
+            "Forge is local project memory. Return only persisted cited facts. "
+            "Never request chat transcripts, secrets, tokens, command output, or GitHub payloads. "
+            "This transport is read-only; use Codex or Antigravity for Forge write workflows."
+        ),
+        host="127.0.0.1",
+        port=port,
+        streamable_http_path="/mcp",
+        stateless_http=True,
+    )
+    for tool_name in CHATGPT_READ_ONLY_TOOLS:
+        server.add_tool(globals()[tool_name])
+    return server
+
+
+def run_chatgpt_http(port: int = 8765) -> None:
+    """Run the ChatGPT-compatible MCP endpoint at http://127.0.0.1:<port>/mcp."""
+    chatgpt_http_server(port).run(transport="streamable-http")
 
 
 def main():

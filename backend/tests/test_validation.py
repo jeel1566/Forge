@@ -28,6 +28,14 @@ class ValidationEvidenceTests(unittest.TestCase):
         self.assertNotIn("private command output", evidence["content"])
         self.assertEqual("forge", evidence["metadata"]["captured_by"])
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows executable resolution")
+    def test_runs_a_repository_relative_windows_command(self):
+        script = self.repository / "scripts" / "check.cmd"
+        script.parent.mkdir()
+        script.write_text("@echo off\r\nexit /b 0\r\n", encoding="utf-8")
+        result = run_validation(self.store, "default", "relative check", ["scripts/check.cmd"])
+        self.assertEqual("passed", result["status"])
+
     def test_cleanup_removes_only_unreferenced_validation_runs(self):
         result = run_validation(self.store, "default", "old manual", [sys.executable, "-c", "pass"])
         evidence_id = self.store.db.execute("SELECT evidence_id FROM evidence_spans WHERE id=?", (result["span_id"],)).fetchone()["evidence_id"]

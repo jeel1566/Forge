@@ -191,6 +191,8 @@ class ForgeRuntime:
         reused = bool(runtime.get("port") and runtime.get("instance_id") and self._healthy(int(runtime["port"]), database_path, runtime["instance_id"]))
         if reused:
             return runtime, True
+        if runtime.get("port") and runtime.get("pid") and _process_is_alive(int(runtime["pid"])) and self._healthy(int(runtime["port"]), database_path):
+            self._stop_process(int(runtime["pid"]))
         port = self._available_port()
         instance_id = str(uuid4())
         environment = os.environ.copy()
@@ -266,6 +268,8 @@ class ForgeRuntime:
             runtime = self._read()
             self._prune_leases(runtime)
             lease = runtime.get("leases", {}).get(session_id)
+            if not lease:
+                raise ValueError("Forge session is no longer active. Start a new session before ending it.")
             if lease and not lease.get("handoff_id") and not abandon:
                 raise ValueError("Record a Session Handoff with forge_complete_session before ending this lease, or explicitly abandon it.")
             if abandon and abandon_reason not in {"validation_unavailable", "handoff_incomplete", "developer_cancelled", "agent_error"}:

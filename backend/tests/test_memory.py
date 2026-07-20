@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.app.store import Store
 
@@ -55,8 +56,62 @@ class MemoryProjectionTests(unittest.TestCase):
         evidence = store.list_evidence("default")[0]
         self.assertEqual(2, len(store.get_evidence(evidence["id"])["spans"]))
         self.assertEqual(1, store.evidence_count("default", "git_commit"))
-        self.assertEqual(23, store.db.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()["version"])
+        self.assertEqual(30, store.db.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()["version"])
         self.assertTrue(store.integrity_check()["ok"])
+
+    def test_one_session_can_hold_multiple_cited_work_items(self):
+        store = self.store()
+        store.register_repository("default", ".")
+        first_span = store.create_evidence("default", "git_commit", "Backend change", "safe", "Backend validation passed", "work-item-one")
+        second_span = store.create_evidence("default", "git_commit", "Frontend change", "safe", "Frontend validation passed", "work-item-two")
+        first = store.start_work_item("default", "session-1", "backend-change", "codex", ".", "feature/work-items", "Add Work Item storage.", ["backend"], "storage")
+        retried = store.start_work_item("default", "session-1", "backend-change", "codex", ".", "feature/work-items", "Add Work Item storage.", ["backend"], "storage")
+        second = store.start_work_item("default", "session-1", "frontend-change", "codex", ".", "feature/work-items", "Add Work Item UI.", ["frontend"], "dashboard")
+        self.assertTrue(retried["idempotent"])
+        self.assertEqual(first["work_item"]["id"], retried["work_item"]["id"])
+        store.finish_work_item("default", first["work_item"]["id"], "completed", "Stored Work Items.", "Separate tasks need separate memory.", "Backend validation passed.", "None.", "None.", [first_span])
+        store.finish_work_item("default", second["work_item"]["id"], "abandoned", "Paused the UI work.", "The backend API needs review first.", "Frontend validation passed.", "No product risk.", "Resume after API review.", [second_span])
+        items = store.list_work_items("default", session_id="session-1")
+        self.assertEqual(2, len(items))
+        self.assertEqual({"completed", "abandoned"}, {item["status"] for item in items})
+        self.assertEqual({"Backend change", "Frontend change"}, {item["citations"][0]["title"] for item in items})
+
+    def test_incident_keeps_facts_hypotheses_and_counterexamples_separate(self):
+        store = self.store()
+        store.register_repository("default", ".")
+        span_id = store.create_evidence("default", "git_commit", "Route definition", "safe", "POST /v1/repositories is defined locally", "route-definition")
+        item = store.start_work_item("default", "session-1", "repository-ui", "codex", ".", "feature/work-items", "Register a repository.", ["frontend"], "dashboard")["work_item"]
+        result = store.capture_learning_observation(
+            "default", item["id"], "route-assumption-1", "decision_pattern", ["frontend"], "API integration",
+            "A repository form calls a local API", "A repository form is added", "The client assumed a route without reading its local definition.",
+            "The route may instead be missing or the server may be stale.", "Inspect the matching local route before changing the client.",
+            "medium", [span_id],
+        )
+        retried = store.capture_learning_observation(
+            "default", item["id"], "route-assumption-1", "decision_pattern", ["frontend"], "API integration",
+            "A repository form calls a local API", "A repository form is added", "The client assumed a route without reading its local definition.",
+            "The route may instead be missing or the server may be stale.", "Inspect the matching local route before changing the client.",
+            "medium", [span_id],
+        )
+        observation = result["observation"]
+        self.assertTrue(retried["idempotent"])
+        self.assertEqual("observed", observation["state"])
+        self.assertIn("may instead", observation["counterexample"])
+        self.assertEqual("Route definition", observation["citations"][0]["title"])
+
+    def test_independent_work_items_make_one_learning_case_proposed(self):
+        store = self.store()
+        store.register_repository("default", ".")
+        span_id = store.create_evidence("default", "git_commit", "Route evidence", "safe", "Route definition inspected", "case-route")
+        first = store.start_work_item("default", "session-1", "case-one", "codex", ".", "main", "Fix route one.", ["frontend"])["work_item"]
+        second = store.start_work_item("default", "session-2", "case-two", "codex", ".", "main", "Fix route two.", ["frontend"])["work_item"]
+        def capture(item_id, key):
+            return store.capture_learning_observation("default", item_id, key, "decision_pattern", ["frontend"], "API", "Calling a local API", "The route was assumed.", "The client did not inspect the route definition.", "The server could be stale.", "Inspect the local route definition before changing a client.", "medium", [span_id])
+        first_case = capture(first["id"], "case-observation-one")["case"]
+        second_case = capture(second["id"], "case-observation-two")["case"]
+        self.assertEqual(first_case["id"], second_case["id"])
+        self.assertEqual("proposed", second_case["state"])
+        self.assertEqual(2, second_case["independent_work_item_count"])
 
     def test_concurrent_evidence_reads_are_serialized(self):
         store = self.store()
@@ -191,6 +246,45 @@ class MemoryProjectionTests(unittest.TestCase):
         retrieved = store.retrieve_decisions("default", file_path="backend/app/store.py", scope="backend/app", category="architecture")
         self.assertEqual([decision["id"]], [item["id"] for item in retrieved])
         self.assertEqual("commit-template", retrieved[0]["evidence"][0]["external_id"])
+
+    def test_vault_search_and_export_use_persisted_facts_not_generated_files(self):
+        store = self.store()
+        store.register_repository("default", self.temporary_directory.name)
+        span_id = store.create_evidence("default", "git_commit", "Vault implementation", "safe", "Vault indexing validation passed", "vault-commit")
+        handoff = store.create_structured_session_context(
+            "default", "codex", ".", "feature/vault", [span_id],
+            {
+                "scope": ["backend/app"], "summary": "Added deterministic vault indexing.", "why": "Later work needs project-local retrieval.",
+                "changed": [{"path": "backend/app/store.py", "summary": "Indexed persisted decision records."}],
+                "decisions": "Export generated project files from SQLite.", "validation": "Focused vault test passed.",
+                "risks_constraints": "Generated files are not evidence.", "unresolved": "None.",
+            },
+        )
+        store.review_session_context(handoff["id"], "approved")
+        decision = store.create_structured_decision(
+            "default", handoff["id"], [span_id],
+            {
+                "category": "architecture", "scope": ["backend/app"], "decision": "Use deterministic vault retrieval.",
+                "context": "Project context must stay local and cited.", "chosen_approach": "Index SQLite facts with FTS5.",
+                "alternatives": [{"option": "Search Markdown", "reason": "Generated files are not source facts."}],
+                "benefits": "Fast local retrieval.", "costs": "Index rebuild work.", "follow_up": "None.",
+                "applicability": "Forge vault only.",
+            },
+        )
+        store.review(decision["id"], "confirmed")
+        found = store.search_vault("default", "deterministic vault retrieval", scope="backend/app", file_path="backend/app/store.py")
+        self.assertEqual([decision["id"]], [entry["record_id"] for entry in found])
+        with patch.object(store, "_rebuild_vault_search", wraps=store._rebuild_vault_search) as rebuild:
+            self.assertEqual([decision["id"]], [entry["record_id"] for entry in store.search_vault("default", "deterministic vault retrieval")])
+        rebuild.assert_not_called()
+        exported = store.export_vault("default")
+        context_path = Path(exported["path"]) / "PROJECT_CONTEXT.md"
+        initial = context_path.read_text(encoding="utf-8")
+        self.assertIn("Forge Project Context", initial)
+        context_path.write_text(initial + "\nMANUAL-FALSE-MEMORY\n", encoding="utf-8")
+        self.assertEqual([], store.search_vault("default", "MANUAL-FALSE-MEMORY"))
+        store.export_vault("default")
+        self.assertEqual(initial, context_path.read_text(encoding="utf-8"))
 
     def test_structured_templates_reject_missing_required_facts(self):
         store = self.store()

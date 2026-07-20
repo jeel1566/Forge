@@ -1,11 +1,12 @@
 import tempfile
 import unittest
+import json
 from email.message import Message
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
 
-from backend.app.git import workspace_id_for_repository
+from backend.app.git import ingest_repository, workspace_id_for_repository
 from backend.app.github import GitHubError, GitHubRateLimitError, GitHubResponse, poll_github, repository_slug, request_json
 from backend.app.store import Store
 from backend.app.worker import run_due_github_polls
@@ -22,6 +23,32 @@ class GitHubRepositoryTests(unittest.TestCase):
 
     def test_workspace_id_is_stable_for_a_path(self):
         self.assertEqual(workspace_id_for_repository("."), workspace_id_for_repository("."))
+
+    def test_git_import_collects_files_from_merge_commits(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            store = Store(Path(temporary_directory) / "forge.sqlite3")
+            repository = Path(temporary_directory) / "repository"
+            repository.mkdir()
+            calls = []
+
+            def output(_repository, *arguments):
+                calls.append(arguments)
+                if arguments == ("rev-parse", "HEAD"):
+                    return "merge-commit"
+                if arguments == ("branch", "--show-current"):
+                    return "main"
+                if arguments[0] == "log":
+                    return "merge-commit\x1fauthor\x1f2026-07-20T00:00:00Z\x1fMerge feature\x1e"
+                if arguments[0] == "diff-tree":
+                    return "backend/app/store.py"
+                raise AssertionError(arguments)
+
+            try:
+                with patch("backend.app.git.git_output", side_effect=output), patch("backend.app.git.optional_git_output", return_value=""), patch("backend.app.git.git_common_dir", return_value=str(repository / ".git")):
+                    ingest_repository(store, "default", repository)
+                self.assertIn(("diff-tree", "--no-commit-id", "--name-only", "-r", "-m", "merge-commit"), calls)
+            finally:
+                store.close()
 
 
 class GitHubPollingTests(unittest.TestCase):
@@ -66,6 +93,13 @@ class GitHubPollingTests(unittest.TestCase):
         self.assertEqual(0, recovered["consecutive_failures"])
         self.assertIsNone(recovered["last_error"])
 
+    def test_scheduler_records_unexpected_failures_without_stopping(self):
+        self.store.configure_github_polling("repo", True, 60)
+        with patch("backend.app.worker.poll_github", side_effect=RuntimeError("database busy")):
+            result = run_due_github_polls(self.store, "9999-01-01T00:00:00+00:00")
+        self.assertEqual("internal_error", result[0]["status"])
+        self.assertEqual("internal_error", self.store.github_poll_status("repo")["health"])
+
     def test_multi_page_import_is_idempotent_and_records_cursor(self):
         pull_one = {"number": 1, "updated_at": "2026-07-17T00:00:00Z", "title": "One", "state": "closed", "html_url": "https://example/1", "user": {"login": "octo"}, "head": {"sha": "one"}}
         pull_two = {"number": 2, "updated_at": "2026-07-18T00:00:00Z", "title": "Two", "state": "open", "html_url": "https://example/2", "user": {"login": "octo"}, "head": {"sha": "two"}}
@@ -88,6 +122,39 @@ class GitHubPollingTests(unittest.TestCase):
             result = poll_github(self.store, "repo", max_pages=1)
         self.assertTrue(result["partial"])
         self.assertIsNone(result["pull_cursor"])
+
+    def test_partial_sync_resumes_a_nested_collection_from_its_checkpoint(self):
+        pull = {"number": 1, "updated_at": "2026-07-17T00:00:00Z", "title": "One", "state": "open", "html_url": "https://example/1", "user": {"login": "octo"}}
+        calls = []
+
+        def response(path, _token, _etag=None):
+            calls.append(path)
+            if "pulls?" in path:
+                return GitHubResponse([pull], {"http_status": 200}, None)
+            if "reviews?page=2" in path:
+                return GitHubResponse([], {"http_status": 200}, None)
+            if path.endswith("/reviews?per_page=100"):
+                return GitHubResponse([], {"http_status": 200}, "/repos/openai/forge/pulls/1/reviews?page=2")
+            return GitHubResponse([], {"http_status": 200}, None)
+
+        with patch("backend.app.github.request_json", side_effect=response):
+            self.assertTrue(poll_github(self.store, "repo", max_pages=2)["partial"])
+            calls.clear()
+            poll_github(self.store, "repo", max_pages=10)
+        self.assertIn("/repos/openai/forge/pulls/1/reviews?page=2", calls)
+
+    def test_github_payloads_and_exports_exclude_raw_response_bodies(self):
+        pull = {"number": 1, "updated_at": "2026-07-17T00:00:00Z", "title": "One", "body": "private payload body", "state": "open", "html_url": "https://example/1", "user": {"login": "octo"}}
+        def response(path, _token, _etag=None):
+            return GitHubResponse([pull], {"http_status": 200}, None) if "pulls?" in path else GitHubResponse([], {"http_status": 200}, None)
+
+        with patch("backend.app.github.request_json", side_effect=response):
+            poll_github(self.store, "repo")
+        evidence = self.store.get_evidence(self.store.list_evidence("repo", "github_pull_request")[0]["id"])
+        self.assertNotIn("private payload body", evidence["content"])
+        export_path = Path(self.temporary_directory.name) / "forge.json"
+        self.store.export(export_path)
+        self.assertNotIn("content", json.loads(export_path.read_text(encoding="utf-8"))["evidence_items"][0])
 
     def test_rate_limit_headers_and_retry_after_are_classified(self):
         headers = Message()

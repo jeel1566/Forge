@@ -18,7 +18,7 @@ flowchart TB
   end
 
   subgraph Forge[Forge on the developer machine]
-    MCP[Local MCP server]
+    MCP[Local MCP server: stdio + read-only HTTP]
     API[Loopback API + dashboard]
   DB[(SQLite: handoffs, validations, cards, rules, events)]
     Rules[Managed rule projection in AGENTS.md]
@@ -80,6 +80,6 @@ Forge provides local Git/GitHub evidence, SQLite persistence, work-session bound
 
 ## Runtime and failure behavior
 
-The API binds to `127.0.0.1`; the MCP process uses local stdio and opens the same SQLite database. Optional GitHub polling runs only while Forge runs, is disabled by default, and never blocks local features. Safe telemetry records request/status/rate-limit/retry information but never tokens, headers, or raw response bodies.
+The API binds to `127.0.0.1`; the agent MCP process uses local stdio and opens the same SQLite database. `forge mcp-http` provides a separate loopback-only Streamable HTTP MCP endpoint containing only safe read tools for ChatGPT's Secure MCP Tunnel flow. OpenAI's external `tunnel-client` forwards that endpoint through an outbound tunnel; it is not part of normal Codex or Antigravity use. Optional GitHub polling runs only while Forge runs, is disabled by default, and never blocks local features. Safe telemetry records request/status/rate-limit/retry information but never tokens, headers, or raw response bodies.
 
 If Forge is offline, agents continue normally and state that shared context is unavailable. If GitHub is offline or rate limited, local Git evidence, MCP, and the dashboard remain usable.

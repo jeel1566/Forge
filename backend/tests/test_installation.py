@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from backend.app.cli import main
 from backend.app.installation import agent_status, install_agent, repair_agent, uninstall_agent
+from backend.app.store import Store
 
 
 class AgentInstallationTests(unittest.TestCase):
@@ -114,6 +115,20 @@ class AgentInstallationTests(unittest.TestCase):
         self.assertEqual("missing", result["database"]["state"])
         self.assertIsNone(result["dashboard_sidecar"])
         self.assertFalse((repository / ".forge" / "forge.sqlite3").exists())
+
+    def test_mcp_http_uses_an_existing_project_database_and_loopback_server(self):
+        repository = Path(self.temporary_directory.name) / "chatgpt-project"
+        repository.mkdir()
+        database = repository / ".forge" / "forge.sqlite3"
+        database.parent.mkdir()
+        Store(database).close()
+        output = io.StringIO()
+        with patch("backend.app.cli.run_chatgpt_http") as run_server, patch.object(sys, "argv", ["forge", "mcp-http", "--path", str(repository), "--port", "9123"]), redirect_stdout(output):
+            main()
+        run_server.assert_called_once_with(9123)
+        result = ast.literal_eval(output.getvalue().strip())
+        self.assertEqual("http://127.0.0.1:9123/mcp", result["endpoint"])
+        self.assertEqual("loopback_only_read_only", result["access"])
 
 
 if __name__ == "__main__":

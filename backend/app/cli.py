@@ -8,6 +8,7 @@ import uvicorn
 
 from .git import ingest_repository
 from .installation import agent_status, antigravity_sidecar_status, install_agent, repair_agent, uninstall_agent
+from .mcp_server import CHATGPT_READ_ONLY_TOOLS, run_chatgpt_http
 from .runtime import ForgeRuntime
 from .store import Store
 from .validation import run_configured_validation, run_validation
@@ -89,6 +90,10 @@ def main():
     export = subcommands.add_parser("export", help="Export non-secret Forge data as JSON")
     export.add_argument("--path", default=".", help="Repository containing the Forge database")
     export.add_argument("--output", required=True, help="New JSON export path")
+    vault = subcommands.add_parser("vault", help="Export project-local generated vault documentation")
+    vault.add_argument("action", choices=("export",))
+    vault.add_argument("--path", default=".")
+    vault.add_argument("--workspace", default="default")
     doctor = subcommands.add_parser("doctor", help="Check local Forge installation and project health without changing data")
     doctor.add_argument("--path", default=".", help="Repository containing the Forge database")
     doctor.add_argument("--agent", choices=("codex", "antigravity", "all"))
@@ -102,6 +107,9 @@ def main():
     configured_validate.add_argument("--path", default=".")
     configured_validate.add_argument("--workspace", default="default")
     configured_validate.add_argument("validation_id")
+    mcp_http = subcommands.add_parser("mcp-http", help="Run Forge's loopback-only read-only Streamable HTTP MCP endpoint for ChatGPT")
+    mcp_http.add_argument("--path", default=".", help="Repository containing the initialized Forge database")
+    mcp_http.add_argument("--port", type=int, default=8765, help="Loopback port for the MCP endpoint")
     args = parser.parse_args()
     if args.command == "install":
         repository = _repository_path(args.path) if args.path else None
@@ -122,6 +130,18 @@ def main():
         agent_result = repair_agent(args.agent, args.dry_run) if args.agent else None
         print({"repository": str(repository_path), "runtime": runtime_result, "agent": agent_result})
         return
+    if args.command == "mcp-http":
+        if not Path(database).exists():
+            parser.error("Forge is offline for this project. Run `forge session-start --path . --agent <agent>` first.")
+        os.environ["FORGE_DB_PATH"] = str(database)
+        print({
+            "transport": "streamable-http",
+            "endpoint": f"http://127.0.0.1:{args.port}/mcp",
+            "access": "loopback_only_read_only",
+            "tools": list(CHATGPT_READ_ONLY_TOOLS),
+        }, flush=True)
+        run_chatgpt_http(args.port)
+        return
     if args.command == "session-end":
         result = ForgeRuntime(repository_path).end_session(args.session_id, args.abandon, args.reason)
         if Path(database).exists() and result["released"]:
@@ -139,6 +159,9 @@ def main():
             return
         if args.command == "export":
             print(store.export(args.output))
+            return
+        if args.command == "vault":
+            print(store.export_vault(args.workspace))
             return
         if args.command == "validate":
             command = args.validation_command[1:] if args.validation_command[:1] == ["--"] else args.validation_command

@@ -54,10 +54,9 @@ def ingest_repository(store: Store, workspace_id: str, path: str | Path) -> dict
         commit, author, occurred_at, subject = record.strip().split("\x1f", 3)
         if store.has_evidence(workspace_id, "git_commit", commit):
             continue
-        diff = git_output(repository, "show", "--format=fuller", "--no-ext-diff", commit)
-        files = [item for item in git_output(repository, "diff-tree", "--no-commit-id", "--name-only", "-r", commit).splitlines() if item]
-        hunks = [line for line in diff.splitlines() if line.startswith("@@")]
-        store.create_evidence(workspace_id, "git_commit", subject, diff, subject, commit, {"commit": commit, "repository": str(repository), "author": author, "occurred_at": occurred_at, "branch": branch, "files": files}, hunks)
+        files = [item for item in git_output(repository, "diff-tree", "--no-commit-id", "--name-only", "-r", "-m", commit).splitlines() if item]
+        summary = f"Commit {commit[:12]} changed {len(files)} file(s)."
+        store.create_evidence(workspace_id, "git_commit", subject, summary, subject, commit, {"commit": commit, "repository": str(repository), "author": author, "occurred_at": occurred_at, "branch": branch, "files": files})
         imported += 1
     store.update_repository_head(workspace_id, head)
     return {"workspace_id": workspace_id, "repository": str(repository), "branch": branch, "commits_seen": len([item for item in commits.split("\x1e") if item.strip()]), "commits_imported": imported}

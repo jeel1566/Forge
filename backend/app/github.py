@@ -122,7 +122,7 @@ def request_json(path: str, token: str, etag: str | None = None) -> GitHubRespon
             failure = GitHubRateLimitError("GitHub rate limit reached.")
         elif error.code in (403, 404):
             failure = GitHubAuthorizationError("GitHub authorization failed. Check repository access and token permissions.")
-        elif error.code in (429, 503):
+        elif error.code == 429:
             failure = GitHubRateLimitError("GitHub requested a retry later.")
         else:
             failure = GitHubError(f"GitHub returned HTTP {error.code}.")
@@ -154,7 +154,8 @@ def _pull_evidence(store: Store, workspace_id: str, pull: dict) -> bool:
     external_id = f"github-pr:{number}:{updated_at}"
     if store.has_evidence(workspace_id, "github_pull_request", external_id):
         return False
-    store.create_evidence(workspace_id, "github_pull_request", f"PR #{number}: {pull['title']}", json.dumps(pull, indent=2), pull.get("body") or pull["title"], external_id, {"number": number, "state": pull.get("state"), "updated_at": updated_at, "url": pull.get("html_url"), "author": pull.get("user", {}).get("login"), "merged_at": pull.get("merged_at"), "head_sha": pull.get("head", {}).get("sha")})
+    quote = pull.get("body") or pull["title"]
+    store.create_evidence(workspace_id, "github_pull_request", f"PR #{number}: {pull['title']}", f"GitHub pull request #{number}.", quote, external_id, {"number": number, "state": pull.get("state"), "updated_at": updated_at, "url": pull.get("html_url"), "author": pull.get("user", {}).get("login"), "merged_at": pull.get("merged_at"), "head_sha": pull.get("head", {}).get("sha")})
     return True
 
 
@@ -179,49 +180,75 @@ def poll_github(store: Store, workspace_id: str, max_pages: int | None = None, m
         def bounded() -> bool:
             return pages >= page_limit or items >= item_limit or time.monotonic() - started >= seconds_limit
 
-        def fetch_pages(path: str, key: str):
+        def sync_collection(path: str, key: str, import_item) -> bool:
             nonlocal pages, items, partial
-            next_path = path
-            first = True
+            next_path = store.github_checkpoint(workspace_id, key) or path
+            use_etag = next_path == path and store.github_checkpoint(workspace_id, key) is None
             while next_path:
                 if bounded():
                     partial = True
-                    return
-                etag = store.github_etag(workspace_id, key) if first else None
+                    return False
+                etag = store.github_etag(workspace_id, key) if use_etag else None
                 response = _response(request_json(next_path, token, etag) if etag else request_json(next_path, token))
-                first = False
+                use_etag = False
                 pages += 1
                 items += len(response.data)
                 store.record_github_response(workspace_id, key, response.metadata)
-                yield from response.data
+                for item in response.data:
+                    import_item(item)
                 next_path = response.next_path
-                if next_path and bounded():
-                    partial = True
-                    return
+                store.set_github_checkpoint(workspace_id, key, next_path)
+            return True
 
-        for pull in fetch_pages(f"/repos/{slug}/pulls?state=all&sort=updated&direction=desc&per_page=100", "pulls"):
-            if _pull_evidence(store, workspace_id, pull):
-                imported_pulls += 1
-            latest_cursor = max(latest_cursor or "", pull.get("updated_at") or "")
-            number = pull["number"]
-            for review in fetch_pages(f"/repos/{slug}/pulls/{number}/reviews?per_page=100", f"reviews:{number}"):
-                review_id = review.get("id")
-                if review_id is None:
-                    raise GitHubMalformedResponseError("GitHub returned a review without an id.")
-                external_id = f"github-review:{review_id}"
-                if not store.has_evidence(workspace_id, "github_review", external_id):
-                    store.create_evidence(workspace_id, "github_review", f"PR #{number} review: {review.get('state', 'unknown')}", json.dumps(review, indent=2), review.get("body") or review.get("state", "Review with no body."), external_id, {"pull_number": number, "state": review.get("state"), "submitted_at": review.get("submitted_at"), "author": review.get("user", {}).get("login")})
-                    imported_reviews += 1
-            for comment in fetch_pages(f"/repos/{slug}/pulls/{number}/comments?per_page=100", f"comments:{number}"):
-                comment_id = comment.get("id")
-                if comment_id is None:
-                    raise GitHubMalformedResponseError("GitHub returned a review comment without an id.")
-                external_id = f"github-review-comment:{comment_id}:{comment.get('updated_at', '')}"
-                if not store.has_evidence(workspace_id, "github_review_comment", external_id):
-                    store.create_evidence(workspace_id, "github_review_comment", f"PR #{number} comment on {comment.get('path') or 'unknown file'}", json.dumps(comment, indent=2), comment.get("body") or "Review comment with no body.", external_id, {"pull_number": number, "path": comment.get("path"), "line": comment.get("line"), "side": comment.get("side"), "commit_id": comment.get("commit_id"), "updated_at": comment.get("updated_at"), "url": comment.get("html_url"), "author": comment.get("user", {}).get("login")})
-                    imported_comments += 1
-            if partial:
+        pull_path = f"/repos/{slug}/pulls?state=all&sort=updated&direction=desc&per_page=100"
+        next_pull_path = store.github_checkpoint(workspace_id, "pulls") or pull_path
+        pull_etag = next_pull_path == pull_path and store.github_checkpoint(workspace_id, "pulls") is None
+        while next_pull_path:
+            if bounded():
+                partial = True
                 break
+            etag = store.github_etag(workspace_id, "pulls") if pull_etag else None
+            response = _response(request_json(next_pull_path, token, etag) if etag else request_json(next_pull_path, token))
+            pull_etag = False
+            pages += 1
+            items += len(response.data)
+            store.record_github_response(workspace_id, "pulls", response.metadata)
+            page_complete = True
+            for pull in response.data:
+                if _pull_evidence(store, workspace_id, pull):
+                    imported_pulls += 1
+                latest_cursor = max(latest_cursor or "", pull.get("updated_at") or "")
+                number = pull["number"]
+
+                def import_review(review: dict):
+                    nonlocal imported_reviews
+                    review_id = review.get("id")
+                    if review_id is None:
+                        raise GitHubMalformedResponseError("GitHub returned a review without an id.")
+                    external_id = f"github-review:{review_id}"
+                    if not store.has_evidence(workspace_id, "github_review", external_id):
+                        quote = review.get("body") or review.get("state", "Review with no body.")
+                        store.create_evidence(workspace_id, "github_review", f"PR #{number} review: {review.get('state', 'unknown')}", f"GitHub review {review_id} for PR #{number}.", quote, external_id, {"pull_number": number, "state": review.get("state"), "submitted_at": review.get("submitted_at"), "author": review.get("user", {}).get("login")})
+                        imported_reviews += 1
+
+                def import_comment(comment: dict):
+                    nonlocal imported_comments
+                    comment_id = comment.get("id")
+                    if comment_id is None:
+                        raise GitHubMalformedResponseError("GitHub returned a review comment without an id.")
+                    external_id = f"github-review-comment:{comment_id}:{comment.get('updated_at', '')}"
+                    if not store.has_evidence(workspace_id, "github_review_comment", external_id):
+                        quote = comment.get("body") or "Review comment with no body."
+                        store.create_evidence(workspace_id, "github_review_comment", f"PR #{number} comment on {comment.get('path') or 'unknown file'}", f"GitHub review comment {comment_id} for PR #{number}.", quote, external_id, {"pull_number": number, "path": comment.get("path"), "line": comment.get("line"), "side": comment.get("side"), "commit_id": comment.get("commit_id"), "updated_at": comment.get("updated_at"), "url": comment.get("html_url"), "author": comment.get("user", {}).get("login")})
+                        imported_comments += 1
+
+                if not sync_collection(f"/repos/{slug}/pulls/{number}/reviews?per_page=100", f"reviews:{number}", import_review) or not sync_collection(f"/repos/{slug}/pulls/{number}/comments?per_page=100", f"comments:{number}", import_comment):
+                    page_complete = False
+                    break
+            if not page_complete:
+                break
+            next_pull_path = response.next_path
+            store.set_github_checkpoint(workspace_id, "pulls", next_pull_path)
         totals = {kind: store.evidence_count(workspace_id, kind) for kind in ("github_pull_request", "github_review", "github_review_comment")}
         return {"repository": slug, "pulls_imported": imported_pulls, "reviews_imported": imported_reviews, "comments_imported": imported_comments, "pulls_total": totals["github_pull_request"], "reviews_total": totals["github_review"], "comments_total": totals["github_review_comment"], "pages": pages, "items": items, "partial": partial, "pull_cursor": None if partial else latest_cursor}
     finally:

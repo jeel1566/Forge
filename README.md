@@ -46,7 +46,18 @@ forge session-start --path . --agent codex
 
 `forge install antigravity --path .` adds an enabled Antigravity-owned sidecar for that repository's loopback dashboard and prints its URL. Restart Antigravity once after installation so it discovers the sidecar. Forge stores its database at `.forge/forge.sqlite3` in the selected repository.
 
-Install Forge for one agent at a time using [agent setup](docs/AGENT-SETUP.md). The global MCP configuration uses `forge-mcp` without a fixed database path; each project session resolves its own `.forge` database. The agent reads context and submits its own structured end-of-session summary; Forge never extracts or uploads the raw conversation.
+Install Forge for one agent at a time using the [installation guide](docs/INSTALLATION.md). The global MCP configuration uses `forge-mcp` without a fixed database path; each project session resolves its own `.forge` database. The agent reads context and submits its own structured end-of-session summary; Forge never extracts or uploads the raw conversation.
+
+## ChatGPT custom app (read-only)
+
+Codex can launch Forge's local `forge-mcp` stdio server directly. ChatGPT cannot: it requires a remote MCP endpoint. Forge provides a separate **loopback-only, read-only** Streamable HTTP endpoint for the supported Secure MCP Tunnel flow. The full, security-first setup—including tunnel ID, runtime key, dynamic health port, restart behavior, and recovery—is in the [installation guide](docs/INSTALLATION.md#4-optional-chatgpt-web-connector).
+
+```powershell
+forge session-start --path . --agent codex
+forge mcp-http --path . --port 8765
+```
+
+Its endpoint is `http://127.0.0.1:8765/mcp`. It exposes only persisted context, handoffs, evidence metadata, rules, alerts, vault search, and GitHub sync status—never Forge write tools, transcripts, tokens, raw command output, or raw GitHub payloads.
 
 ## GPT-5.6 and Codex
 
@@ -69,7 +80,8 @@ Forge contains no LangChain, LlamaIndex, OpenAI API, or GPT-5.6 integration. If 
 - [Seven-stage learning pipeline](docs/INGESTION-PIPELINE.md)
 - [MCP and API contract](docs/API-MCP-SPEC.md)
 - [Data model](docs/DATA-MODEL.md)
-- [Codex and Antigravity setup](docs/AGENT-SETUP.md)
+- [Complete installation guide](docs/INSTALLATION.md)
+- [Codex and Antigravity setup reference](docs/AGENT-SETUP.md)
 - [Global agent installation and lifecycle design](docs/AGENT-LIFECYCLE-DESIGN.md)
 - [Model runtime boundaries](docs/MODEL-RUNTIME.md)
 - [Implementation plan](docs/IMPLEMENTATION-PLAN.md)
