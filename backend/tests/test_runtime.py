@@ -88,6 +88,12 @@ class ForgeRuntimeTests(unittest.TestCase):
             result = self.runtime.end_session("session-1", abandon=True, abandon_reason="developer_cancelled")
         self.assertTrue(result["abandoned"])
 
+    def test_unknown_session_end_does_not_remove_runtime_metadata(self):
+        self.runtime._write({"version": 3, "mode": "lease_only", "database": str(self.database), "leases": {}})
+        with self.assertRaises(ValueError):
+            self.runtime.end_session("unknown-session")
+        self.assertTrue(self.runtime.path.exists())
+
     def test_mark_handoff_makes_lease_ready_to_end(self):
         self.runtime._write({"version": 2, "instance_id": "instance-1", "pid": 1234, "port": 43123, "database": str(self.database), "leases": {"session-1": {"agent": "codex", "expires_at": "2999-01-01T00:00:00+00:00"}}})
         result = self.runtime.mark_handoff("session-1", "codex", "handoff-1")

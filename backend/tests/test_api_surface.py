@@ -31,6 +31,7 @@ class ApiSurfaceTests(unittest.TestCase):
             "/v1/workspaces/{workspace_id}/approved-guardrails",
             "/v1/workspaces/{workspace_id}/portable-guardrails",
             "/v1/workspaces/{workspace_id}/agents-guardrail-handoffs",
+            "/v1/workspaces/{workspace_id}/imports",
             "/v1/workspaces/{workspace_id}/intention",
             "/v1/reflections/{reflection_id}/review",
             "/v1/memory/{entry_id}/archive",

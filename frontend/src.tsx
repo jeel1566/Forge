@@ -80,7 +80,15 @@ function App() {
   const [feedbackAssessment, setFeedbackAssessment] = useState("approve");
   const [error, setError] = useState("");
 
-  const get = <T,>(path: string, fallback: T) => fetch(`${api}${path}`).then(response => response.ok ? response.json() as Promise<T> : fallback);
+  const get = async <T,>(path: string, fallback: T) => {
+    try {
+      const response = await fetch(`${api}${path}`);
+      return response.ok ? await response.json() as T : fallback;
+    } catch {
+      setError("Forge is unavailable. Start the local dashboard or retry when it is online.");
+      return fallback;
+    }
+  };
   const loadWorkspace = () => {
     void get<Repository | null>(`/v1/workspaces/${workspace}/repository`, null).then(setRepository);
     void get<Coordination | null>(`/v1/workspaces/${workspace}/coordination`, null).then(setCoordination);
@@ -88,13 +96,13 @@ function App() {
     void get<ReusableRule[]>(`/v1/workspaces/${workspace}/reusable-rules`, []).then(result => setReusableRules(safeList<ReusableRule>(result)));
     void get<ReusableRule[]>("/v1/reusable-rules", []).then(result => setReusableRequests(safeList<ReusableRule>(result)));
     void get<LearningCard[]>(`/v1/workspaces/${workspace}/learning-cards`, []).then(result => setCards(safeList<LearningCard>(result).map(normalizeCard)));
-    void get<LearningAlert[]>(`/v1/workspaces/${workspace}/learning-alerts`, []).then(setAlerts);
+    void get<LearningAlert[]>(`/v1/workspaces/${workspace}/learning-alerts`, []).then(result => setAlerts(safeList<LearningAlert>(result)));
     void get<ProjectionStatus | null>(`/v1/workspaces/${workspace}/projection-status`, null).then(result => setProjectionStatus(normalizeProjectionStatus(result)));
     void get<SessionHandoff[]>(`/v1/workspaces/${workspace}/handoffs`, []).then(result => setHandoffs(safeList<SessionHandoff>(result).map(normalizeHandoff)));
     void get<Evidence[]>(`/v1/workspaces/${workspace}/evidence`, []).then(setEvidence);
     void get<GitHubPollStatus | null>(`/v1/workspaces/${workspace}/github/status`, null).then(setGithubPolling);
   };
-  useEffect(() => { void get<GitHubCredentials>("/v1/connectors/github", { token_saved: false, state: "disconnected" }).then(setGithub); void get<RegisteredRepository[]>("/v1/repositories", []).then(setRepositories); }, []);
+  useEffect(() => { void get<GitHubCredentials>("/v1/connectors/github", { token_saved: false, state: "disconnected" }).then(setGithub); void get<RegisteredRepository[]>("/v1/repositories", []).then(result => setRepositories(safeList<RegisteredRepository>(result))); }, []);
   useEffect(() => { loadWorkspace(); setSelectedCardId(null); }, [workspace]);
   useEffect(() => { setBaseRef(repository?.coordination_base_ref ?? ""); }, [repository?.coordination_base_ref]);
   useEffect(() => { setGithubPollingEnabled(githubPolling?.enabled ?? false); setGithubPollingInterval(String(githubPolling?.interval_seconds ?? 900)); }, [githubPolling?.enabled, githubPolling?.interval_seconds]);

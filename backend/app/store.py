@@ -18,6 +18,8 @@ def now() -> str:
 
 
 class Store:
+    _reconciled_paths: set[Path] = set()
+
     def __init__(self, path: str | Path | None = None):
         self.path = Path(path or ".forge/forge.sqlite3")
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -421,15 +423,25 @@ class Store:
                 evidence_span_id TEXT NOT NULL REFERENCES evidence_spans(id), created_at TEXT NOT NULL,
                 UNIQUE(workspace_id, handoff_id)
             );
+            """), (29, """
+            ALTER TABLE github_sync_state ADD COLUMN checkpoints TEXT NOT NULL DEFAULT '{}';
             """)]
+        migrated = False
         for version, migration in migrations:
             if version not in applied:
                 self.db.executescript(migration)
                 self.db.execute("INSERT INTO schema_migrations VALUES (?, ?)", (version, now()))
+                migrated = True
+        if 29 not in applied:
+            self.db.execute("UPDATE evidence_items SET content=title WHERE kind IN ('git_commit', 'github_pull_request', 'github_review', 'github_review_comment')")
+            self.db.execute("UPDATE evidence_spans SET quote='[redacted legacy Git diff hunk]' WHERE quote LIKE '@@%'")
         self.db.commit()
-        self._backfill_learning_cards()
-        self._backfill_learning_card_links()
-        self._reconcile_projections()
+        if migrated:
+            self._backfill_learning_cards()
+            self._backfill_learning_card_links()
+        if self.path.resolve() not in self._reconciled_paths:
+            self._reconcile_projections()
+            self._reconciled_paths.add(self.path.resolve())
 
     def _backfill_learning_cards(self):
         rows = self.db.execute("SELECT id, workspace_id, rule_key, scope_json, learning_area, learning_trigger, learning_action, state, created_at, activated_at FROM rule_versions").fetchall()
@@ -484,6 +496,8 @@ class Store:
             raise FileExistsError(f"Export already exists: {target}")
         tables = ("repositories", "evidence_items", "evidence_spans", "decisions", "decision_citations", "decision_scopes", "reflections", "intentions", "project_memory_entries", "session_contexts", "session_context_citations", "session_context_files", "session_context_scopes", "agent_work_sessions", "worktrees", "connector_state", "github_poll_settings", "agents_guardrail_handoffs", "workspace_rule_policies", "session_outcomes", "session_outcome_citations", "session_end_events", "validation_runs", "learning_cards", "learning_card_observations", "learning_card_alerts", "learning_card_reviews", "rule_versions", "rule_version_citations", "rule_verifications", "verification_inputs", "rule_projections", "projection_alerts", "reusable_rules", "reusable_rule_sources", "project_reusable_rule_overrides", "session_feedback")
         data = {table: [dict(row) for row in self.db.execute(f"SELECT * FROM {table}")] for table in tables}
+        for evidence in data["evidence_items"]:
+            evidence.pop("content", None)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(data, indent=2), encoding="utf-8")
         return str(target.resolve())
@@ -1052,6 +1066,22 @@ class Store:
         self._github_sync_state(workspace_id)
         row = self.db.execute("SELECT etags FROM github_sync_state WHERE workspace_id=?", (workspace_id,)).fetchone()
         return json.loads(row["etags"]).get(key)
+
+    def github_checkpoint(self, workspace_id: str, key: str) -> str | None:
+        self._github_sync_state(workspace_id)
+        row = self.db.execute("SELECT checkpoints FROM github_sync_state WHERE workspace_id=?", (workspace_id,)).fetchone()
+        return json.loads(row["checkpoints"] or "{}").get(key)
+
+    def set_github_checkpoint(self, workspace_id: str, key: str, path: str | None):
+        self._github_sync_state(workspace_id)
+        row = self.db.execute("SELECT checkpoints FROM github_sync_state WHERE workspace_id=?", (workspace_id,)).fetchone()
+        checkpoints = json.loads(row["checkpoints"] or "{}")
+        if path:
+            checkpoints[key] = path
+        else:
+            checkpoints.pop(key, None)
+        self.db.execute("UPDATE github_sync_state SET checkpoints=?, updated_at=? WHERE workspace_id=?", (json.dumps(checkpoints, sort_keys=True), now(), workspace_id))
+        self.db.commit()
 
     def record_github_response(self, workspace_id: str, key: str, metadata: dict):
         self._github_sync_state(workspace_id)

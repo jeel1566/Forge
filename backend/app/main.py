@@ -16,7 +16,6 @@ from .github import GitHubError, poll_github
 from .store import Store
 from .worker import github_poll_scheduler
 from .worktree import git_common_dir
-from .workflow import create_candidate
 
 store = Store(os.environ.get("FORGE_DB_PATH"))
 database_request_lock = asyncio.Lock()
@@ -55,12 +54,6 @@ async def serialize_database_requests(request, call_next):
         return await call_next(request)
     async with database_request_lock:
         return await call_next(request)
-
-
-class PendingDecision(BaseModel):
-    statement: str = Field(min_length=1)
-    category: str = "process"
-    evidence_quote: str = Field(min_length=1)
 
 
 class Review(BaseModel):
@@ -406,6 +399,7 @@ def evidence_detail(evidence_id: str):
     result = store.get_evidence(evidence_id)
     if not result:
         raise HTTPException(404, "evidence not found")
+    result.pop("content", None)
     return result
 
 
@@ -452,11 +446,6 @@ def poll_workspace_github(workspace_id: str):
         store.record_github_poll_failure(workspace_id, str(error), error.kind, error.retry_after_seconds, error.rate_limit_reset_at)
         status = 409 if error.kind == "poll_in_progress" else 401 if error.kind == "authentication_failed" else 403 if error.kind == "authorization_failed" else 429 if error.kind == "rate_limited" else 502
         raise HTTPException(status, {"health": error.kind, "message": str(error)}) from error
-
-
-@app.post("/v1/workspaces/{workspace_id}/imports", status_code=201)
-def record_decision(workspace_id: str, body: PendingDecision):
-    return store.create_pending(**create_candidate(workspace_id, **body.model_dump()))
 
 
 @app.post("/v1/workspaces/{workspace_id}/git/imports")

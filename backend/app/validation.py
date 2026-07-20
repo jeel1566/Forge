@@ -51,7 +51,7 @@ def run_validation(store: Store, workspace_id: str, label: str, command: list[st
             command = [resolved, *command[1:]]
     started = monotonic()
     try:
-        completed = subprocess.run(command, cwd=repository["path"], shell=False, capture_output=True, text=True, timeout=timeout_seconds, check=False)
+        completed = subprocess.run(command, cwd=repository["path"], shell=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout_seconds, check=False)
         status, exit_code = ("passed", completed.returncode) if completed.returncode == 0 else ("failed", completed.returncode)
     except subprocess.TimeoutExpired:
         status, exit_code = "timed_out", None
