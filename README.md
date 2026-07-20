@@ -1,15 +1,15 @@
 # Forge
 
-Forge is local-first project memory for coding agents. It lets Codex and Antigravity leave a compact, evidence-backed handoff for the next agent without turning developer chats into an archive.
+Forge helps coding agents share trusted decisions—not overwhelming context—and turn each completed session into better rules for the next one. It is a local-first decision and learning system: Codex and Antigravity leave compact, evidence-backed handoffs without turning developer chats into an archive.
 
 Forge stores local facts: Session Handoffs, decisions, configured validation results, Learning Cards, scoped rules, Git/GitHub evidence, and safe runtime telemetry. SQLite is the source of truth; the dashboard and MCP tools are local views of that data.
 
 ## What Forge does
 
 - Starts one local Forge session per active agent and repository.
-- Gives the agent compact context: active project rules, approved reusable rules, decisions, alerts, and the latest handoff.
-- Saves a structured handoff at `/forge_end`: what changed, why, what failed before, alternatives, validation, risks, and unresolved work.
-- Creates evidence-gated Learning Cards and scoped `AGENTS.md` rules. A rule needs two independent, trusted configured-validation-backed handoffs before it can be activated.
+- Gives the agent only the decision guidance relevant to its next task: active project rules, approved reusable rules, decisions, alerts, and the latest handoff.
+- Saves a structured, transcript-free decision handoff at `/forge_end`: what changed, why, what failed before, alternatives, validation, risks, and unresolved work.
+- Turns repeated, trusted outcomes into evidence-gated Learning Cards and scoped `AGENTS.md` rules. A rule needs two independent, trusted configured-validation-backed handoffs before it can be activated.
 - Keeps rule activation reversible. Contradictory evidence retracts the rule and rolls back Forge's managed `AGENTS.md` block.
 - Optionally imports GitHub pull requests, reviews, and inline review comments using local-only, bounded, restart-safe polling.
 
@@ -65,7 +65,7 @@ The dashboard is optional. MCP and SQLite continue to work when no dashboard ser
 
 Forge has no OpenAI API key, model SDK, LangChain, LlamaIndex, or internal LLM. It does not choose a model, read conversations, summarise chats, or train on the project.
 
-If Codex is configured to use GPT-5.6, GPT-5.6 is the reasoning agent: it reads repository instructions, retrieves Forge context, makes code changes, runs checks, and writes its own clean handoff. Antigravity follows the same pattern with its own configured model. Forge is the durable memory and evidence gate, not the brain.
+If Codex is configured to use GPT-5.6, GPT-5.6 is the reasoning agent: it reads repository instructions, retrieves Forge decision guidance, makes code changes, runs checks, and writes its own clean handoff. Antigravity follows the same pattern with its own configured model. Forge is the decision ledger, evidence gate, and rule lifecycle system—not the brain.
 
 This repository cannot prove or measure prior GPT-5.6 chat performance because Forge deliberately does not store raw chats. See [Model runtime boundaries](docs/MODEL-RUNTIME.md).
 
@@ -73,7 +73,7 @@ This repository cannot prove or measure prior GPT-5.6 chat performance because F
 
 This is a development-provenance summary from the visible project work and Git history, not a Forge chat export. Codex was used as the coding collaborator to audit the repository, turn the Forge idea into implementation slices, change the Python/SQLite/MCP code, build the agent install and session lifecycle, harden GitHub polling, repair dashboard/runtime issues, add the learning and vault flows, run tests/builds, prepare the `pipx` package, and keep the documentation aligned with the shipped code.
 
-Codex did not become a hidden Forge service. During future use, Codex (and GPT-5.6 when selected by Codex) remains the agent that reasons about a task and writes a clean handoff; Forge remains the local memory, evidence gate, and rule lifecycle system.
+Codex did not become a hidden Forge service. During future use, Codex (and GPT-5.6 when selected by Codex) remains the agent that reasons about a task and writes a clean handoff; Forge remains the local decision ledger, evidence gate, and rule lifecycle system.
 
 ## Release status
 

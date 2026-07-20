@@ -1,6 +1,6 @@
 # Install and operate Forge
 
-Forge is local-first. Each repository stores its data in `.forge/forge.sqlite3`; normal Codex and Antigravity use does not need a cloud account, tunnel, dashboard, or GitHub token.
+Forge is local-first. It stores trusted decisions, cited handoffs, and evidence-gated rules in each repository's `.forge/forge.sqlite3`; normal Codex and Antigravity use does not need a cloud account, tunnel, dashboard, or GitHub token.
 
 ## Prerequisites
 

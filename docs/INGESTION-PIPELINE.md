@@ -2,7 +2,7 @@
 
 ## 1. Start with persisted context
 
-An installed agent starts a local session lease and calls `forge_get_session_start_context`. The compact response contains persisted rules, reusable rules, decisions, alerts, and latest handoff—not a reconstructed chat summary.
+An installed agent starts a local session lease and calls `forge_get_session_start_context`. The compact response contains the persisted decisions, rules, alerts, and latest handoff relevant to continuing work—not a reconstructed chat summary or an overwhelming context dump.
 
 ## 2. Work and collect safe evidence
 

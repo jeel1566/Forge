@@ -1,6 +1,6 @@
 # Codex and Antigravity setup reference
 
-The [installation guide](INSTALLATION.md) is the primary step-by-step setup document. This page remains the concise reference for agent-specific installation, repair, and local lifecycle behavior.
+The [installation guide](INSTALLATION.md) is the primary step-by-step setup document. This page remains the concise reference for agent-specific installation, repair, and local lifecycle behavior. Forge shares trusted decisions and scoped rules between sessions; it does not archive the agent's full context or chat.
 
 ## Install Forge once
 
@@ -110,9 +110,9 @@ Forge deliberately exposes only read tools through this transport: compact sessi
 2. The agent works normally; Forge never watches or extracts the private chat.
 3. At session end, **the same agent** summarises its own decisions, failures, prior approach, fix, validation, and unresolved work.
 4. The agent submits the compact structured outcome through MCP with evidence references.
-5. The next Codex or Antigravity session retrieves that shared memory.
+5. The next Codex or Antigravity session retrieves the relevant decision handoff and scoped rules.
 
-Codex does not summarise Antigravity. Antigravity does not summarise Codex. Both contribute to and read the same local Forge memory.
+Codex does not summarise Antigravity. Antigravity does not summarise Codex. Both contribute to and read the same local Forge decision ledger.
 
 ## Reusable rules and feedback
 

@@ -8,7 +8,7 @@ Forge uses forward-only SQLite migrations. Existing legacy rows are preserved fo
 |---|---|
 | `<repository>/.forge/forge.sqlite3` | Project repository, evidence, handoffs, validations, cards, rules, polling, work items, feedback, and projection history. |
 | `~/.forge/reusable-rules.sqlite3` | Local cross-project reusable-rule registry; configurable with `FORGE_REUSABLE_RULES_DB`. |
-| `<repository>/.forge/vault/` | Generated project context export only; edits do not create memory. |
+| `<repository>/.forge/vault/` | Generated project decision/context export only; edits do not create records or rules. |
 
 ## Canonical records
 

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Forge is a local evidence and memory layer used by coding agents. Agents do the reasoning; Forge persists only the compact facts they explicitly submit and connects those facts to local proof.
+Forge is a local decision and learning layer for coding agents. Agents do the reasoning; Forge persists only the compact, trusted decisions they explicitly submit, connects them to local proof, and turns repeated validated outcomes into scoped guidance for later sessions.
 
 Every repository keeps a project database at `.forge/forge.sqlite3`. Reusable rules live in a separate local registry at `~/.forge/reusable-rules.sqlite3` unless `FORGE_REUSABLE_RULES_DB` overrides it.
 
@@ -78,4 +78,4 @@ stateDiagram-v2
 
 ## Failure boundaries
 
-The local product remains usable if GitHub, the network, the dashboard, or the optional tunnel is unavailable. GitHub sync records safe status and retry telemetry; it never blocks local memory operations. Forge never overwrites a manually edited managed rule block: it creates a projection-repair alert instead.
+The local product remains usable if GitHub, the network, the dashboard, or the optional tunnel is unavailable. GitHub sync records safe status and retry telemetry; it never blocks local decision or rule operations. Forge never overwrites a manually edited managed rule block: it creates a projection-repair alert instead.

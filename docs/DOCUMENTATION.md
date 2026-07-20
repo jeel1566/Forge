@@ -1,5 +1,7 @@
 # Forge documentation map
 
+Forge is a local-first decision and learning system for coding agents. Its documentation describes how trusted, evidence-backed decisions move from a Session Handoff to a scoped rule; Forge does not store raw chats or attempt to preserve every piece of agent context.
+
 ## Start here
 
 - [README](../README.md) — product overview, architecture summary, safety rules, and quick install.

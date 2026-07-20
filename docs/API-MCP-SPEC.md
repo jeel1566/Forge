@@ -7,7 +7,7 @@ Forge has two local transports:
 
 The dashboard uses the loopback FastAPI endpoints under `/v1` and never exposes secrets or raw payloads.
 
-## Session and memory tools
+## Session and decision tools
 
 | Tool | Purpose |
 |---|---|

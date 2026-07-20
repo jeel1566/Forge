@@ -2,13 +2,13 @@
 
 ## Product outcome
 
-Forge gives coding agents durable local project context without collecting private chats. It reduces repeated mistakes by preserving the decision, failed approach, fix, validation, and bounded rule lifecycle as cited local records.
+Forge helps coding agents share trusted decisions—not overwhelming context—and turn each completed session into better rules for the next one. It reduces repeated mistakes by preserving the decision, failed approach, fix, validation, and bounded rule lifecycle as cited local records without collecting private chats.
 
 ## Shipped requirements
 
 | Area | Requirement |
 |---|---|
-| Local memory | Persist project handoffs, decisions, work items, incidents, evidence, and vault search in SQLite. |
+| Decision ledger | Persist project handoffs, decisions, work items, incidents, evidence, and vault search in SQLite. |
 | Agent lifecycle | Install Codex or Antigravity separately; create/reuse per-repository leases; end with a cited handoff. |
 | Learning | Use Learning Cards with deterministic identity, duplicate/conflict alerts, trusted validation gates, review due dates, verification, and retraction. |
 | Rules | Support approval/autonomous policy, journaled managed-block projection, rollback, and reusable-rule approval across two repositories. |

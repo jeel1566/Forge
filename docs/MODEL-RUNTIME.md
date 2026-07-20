@@ -4,7 +4,7 @@
 
 Forge has no model provider SDK, no OpenAI API integration, no LangChain, no LlamaIndex, no vector database, and no hidden transcript reader. It does not choose a model, ask a model to summarise work, judge a model's reasoning, or train on Forge data.
 
-Forge's role is deliberately smaller: durable local storage, deterministic evidence checks, rule lifecycle control, and retrieval through MCP.
+Forge's role is deliberately smaller: a durable local decision ledger, deterministic evidence checks, rule lifecycle control, and retrieval of only relevant guidance through MCP. It does not try to retain or recreate an agent's entire working context.
 
 ## Codex and GPT-5.6
 
