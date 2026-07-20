@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
 
-from backend.app.git import workspace_id_for_repository
+from backend.app.git import ingest_repository, workspace_id_for_repository
 from backend.app.github import GitHubError, GitHubRateLimitError, GitHubResponse, poll_github, repository_slug, request_json
 from backend.app.store import Store
 from backend.app.worker import run_due_github_polls
@@ -23,6 +23,32 @@ class GitHubRepositoryTests(unittest.TestCase):
 
     def test_workspace_id_is_stable_for_a_path(self):
         self.assertEqual(workspace_id_for_repository("."), workspace_id_for_repository("."))
+
+    def test_git_import_collects_files_from_merge_commits(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            store = Store(Path(temporary_directory) / "forge.sqlite3")
+            repository = Path(temporary_directory) / "repository"
+            repository.mkdir()
+            calls = []
+
+            def output(_repository, *arguments):
+                calls.append(arguments)
+                if arguments == ("rev-parse", "HEAD"):
+                    return "merge-commit"
+                if arguments == ("branch", "--show-current"):
+                    return "main"
+                if arguments[0] == "log":
+                    return "merge-commit\x1fauthor\x1f2026-07-20T00:00:00Z\x1fMerge feature\x1e"
+                if arguments[0] == "diff-tree":
+                    return "backend/app/store.py"
+                raise AssertionError(arguments)
+
+            try:
+                with patch("backend.app.git.git_output", side_effect=output), patch("backend.app.git.optional_git_output", return_value=""), patch("backend.app.git.git_common_dir", return_value=str(repository / ".git")):
+                    ingest_repository(store, "default", repository)
+                self.assertIn(("diff-tree", "--no-commit-id", "--name-only", "-r", "-m", "merge-commit"), calls)
+            finally:
+                store.close()
 
 
 class GitHubPollingTests(unittest.TestCase):

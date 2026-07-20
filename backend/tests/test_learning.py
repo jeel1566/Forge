@@ -213,6 +213,9 @@ class ReusableRuleTests(unittest.TestCase):
             overridden = new_store.set_reusable_rule_override("default", active["id"], "replace", "This project requires the repository check before release.")
             self.assertEqual("project_override", overridden["origin"])
             self.assertEqual("This project requires the repository check before release.", new_store.session_start_context("default")["reusable_rules"][0]["statement"])
+            ignored = new_store.set_reusable_rule_override("default", active["id"], "ignore")
+            self.assertEqual("ignore", ignored["override_action"])
+            self.assertEqual([], new_store.session_start_context("default")["reusable_rules"])
 
     def test_feedback_is_cited_local_review_data(self):
         with patch.dict("os.environ", {"FORGE_REUSABLE_RULES_DB": str(self.registry)}):

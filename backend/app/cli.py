@@ -90,7 +90,7 @@ def main():
     export = subcommands.add_parser("export", help="Export non-secret Forge data as JSON")
     export.add_argument("--path", default=".", help="Repository containing the Forge database")
     export.add_argument("--output", required=True, help="New JSON export path")
-    vault = subcommands.add_parser("vault", help="Search or export project-local generated vault documentation")
+    vault = subcommands.add_parser("vault", help="Export project-local generated vault documentation")
     vault.add_argument("action", choices=("export",))
     vault.add_argument("--path", default=".")
     vault.add_argument("--workspace", default="default")

@@ -8,6 +8,7 @@ class ApiSurfaceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temporary_directory = tempfile.TemporaryDirectory()
+        cls.previous_database = os.environ.get("FORGE_DB_PATH")
         os.environ["FORGE_DB_PATH"] = str(Path(cls.temporary_directory.name) / "forge.sqlite3")
         from backend.app.main import app, store
 
@@ -18,7 +19,10 @@ class ApiSurfaceTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.store.close()
         cls.temporary_directory.cleanup()
-        os.environ.pop("FORGE_DB_PATH", None)
+        if cls.previous_database is None:
+            os.environ.pop("FORGE_DB_PATH", None)
+        else:
+            os.environ["FORGE_DB_PATH"] = cls.previous_database
 
     def test_only_canonical_learning_routes_remain_public(self):
         paths = {route.path for route in self.app.routes}

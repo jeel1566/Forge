@@ -83,7 +83,11 @@ function App() {
   const get = async <T,>(path: string, fallback: T) => {
     try {
       const response = await fetch(`${api}${path}`);
-      return response.ok ? await response.json() as T : fallback;
+      if (!response.ok) {
+        setError(`Forge returned ${response.status}. Retry after the local dashboard is ready.`);
+        return fallback;
+      }
+      return await response.json() as T;
     } catch {
       setError("Forge is unavailable. Start the local dashboard or retry when it is online.");
       return fallback;

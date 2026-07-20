@@ -425,6 +425,12 @@ class Store:
             );
             """), (29, """
             ALTER TABLE github_sync_state ADD COLUMN checkpoints TEXT NOT NULL DEFAULT '{}';
+            """), (30, """
+            CREATE TABLE IF NOT EXISTS vault_search_state (
+                workspace_id TEXT PRIMARY KEY,
+                source_hash TEXT NOT NULL,
+                indexed_at TEXT NOT NULL
+            );
             """)]
         migrated = False
         for version, migration in migrations:
@@ -1316,6 +1322,8 @@ class Store:
             (workspace_id, reusable_rule_id, action, replacement, timestamp, timestamp),
         )
         self.db.commit()
+        if action == "ignore":
+            return {**active, "origin": "project_override", "override_action": "ignore"}
         return next(rule for rule in self.reusable_rules(workspace_id) if rule["id"] == reusable_rule_id)
 
     def record_session_feedback(self, workspace_id: str, handoff_id: str, context_useful: str, irrelevant_or_missing: str, rule_assessment: str) -> dict:
@@ -1699,8 +1707,7 @@ class Store:
         params.append(max(1, min(limit, 100)))
         return [self.get_learning_case(row["id"]) for row in self.db.execute(query, params).fetchall()]
 
-    def _rebuild_vault_search(self, workspace_id: str):
-        self.db.execute("DELETE FROM vault_search WHERE workspace_id=?", (workspace_id,))
+    def _vault_search_entries(self, workspace_id: str) -> list[tuple[str, str, str, str, str]]:
         entries: list[tuple[str, str, str, str, str]] = []
         for item in self.list_work_items(workspace_id, limit=100):
             entries.append((
@@ -1744,7 +1751,20 @@ class Store:
                 " ".join(rule["scope"]),
                 "\n".join([rule["statement"], rule["state"]]),
             ))
+        return entries
+
+    @staticmethod
+    def _vault_search_hash(entries: list[tuple[str, str, str, str, str]]) -> str:
+        return sha256(json.dumps(entries, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+
+    def _rebuild_vault_search(self, workspace_id: str, entries: list[tuple[str, str, str, str, str]] | None = None):
+        entries = entries if entries is not None else self._vault_search_entries(workspace_id)
+        self.db.execute("DELETE FROM vault_search WHERE workspace_id=?", (workspace_id,))
         self.db.executemany("INSERT INTO vault_search (record_id, workspace_id, record_type, scope, content) VALUES (?, ?, ?, ?, ?)", entries)
+        self.db.execute(
+            "INSERT INTO vault_search_state VALUES (?, ?, ?) ON CONFLICT(workspace_id) DO UPDATE SET source_hash=excluded.source_hash, indexed_at=excluded.indexed_at",
+            (workspace_id, self._vault_search_hash(entries), now()),
+        )
         self.db.commit()
 
     def search_vault(self, workspace_id: str, query: str, scope: str | None = None, file_path: str | None = None, limit: int = 20):
@@ -1752,7 +1772,11 @@ class Store:
         tokens = [token for token in tokens if token]
         if not tokens:
             raise ValueError("query must contain searchable text.")
-        self._rebuild_vault_search(workspace_id)
+        entries = self._vault_search_entries(workspace_id)
+        source_hash = self._vault_search_hash(entries)
+        state = self.db.execute("SELECT source_hash FROM vault_search_state WHERE workspace_id=?", (workspace_id,)).fetchone()
+        if not state or state["source_hash"] != source_hash:
+            self._rebuild_vault_search(workspace_id, entries)
         match = " AND ".join(f'"{token}"' for token in tokens)
         rows = self.db.execute("SELECT record_id, record_type, scope, snippet(vault_search, 4, '[', ']', '…', 14) AS excerpt FROM vault_search WHERE vault_search MATCH ? AND workspace_id=? ORDER BY rank LIMIT ?", (match, workspace_id, max(1, min(limit, 50)))).fetchall()
         required = (file_path or scope or "").replace("\\", "/").strip("/").lower()

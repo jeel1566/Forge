@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.app.store import Store
 
@@ -55,7 +56,7 @@ class MemoryProjectionTests(unittest.TestCase):
         evidence = store.list_evidence("default")[0]
         self.assertEqual(2, len(store.get_evidence(evidence["id"])["spans"]))
         self.assertEqual(1, store.evidence_count("default", "git_commit"))
-        self.assertEqual(29, store.db.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()["version"])
+        self.assertEqual(30, store.db.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()["version"])
         self.assertTrue(store.integrity_check()["ok"])
 
     def test_one_session_can_hold_multiple_cited_work_items(self):
@@ -273,6 +274,9 @@ class MemoryProjectionTests(unittest.TestCase):
         store.review(decision["id"], "confirmed")
         found = store.search_vault("default", "deterministic vault retrieval", scope="backend/app", file_path="backend/app/store.py")
         self.assertEqual([decision["id"]], [entry["record_id"] for entry in found])
+        with patch.object(store, "_rebuild_vault_search", wraps=store._rebuild_vault_search) as rebuild:
+            self.assertEqual([decision["id"]], [entry["record_id"] for entry in store.search_vault("default", "deterministic vault retrieval")])
+        rebuild.assert_not_called()
         exported = store.export_vault("default")
         context_path = Path(exported["path"]) / "PROJECT_CONTEXT.md"
         initial = context_path.read_text(encoding="utf-8")
