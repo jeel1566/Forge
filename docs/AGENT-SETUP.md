@@ -5,7 +5,7 @@ The [installation guide](INSTALLATION.md) is the primary step-by-step setup docu
 ## Install Forge once
 
 ```powershell
-pipx install forge
+pipx install forge-local-memory
 forge install codex
 # or, from each dashboard-enabled project:
 forge install antigravity --path .
@@ -20,7 +20,7 @@ The installer also adds a Forge-owned global `forge-end` skill for that selected
 For a pinned pre-release from this repository:
 
 ```powershell
-pipx install "git+https://github.com/jeel1566/Forge.git@v1.0.0"
+pipx install "git+https://github.com/jeel1566/Forge.git@v0.1.0"
 ```
 
 ## Start a project session
@@ -74,7 +74,7 @@ Uninstall removes only that agent’s Forge MCP entry, Forge-managed instruction
 ## Upgrade
 
 ```powershell
-pipx upgrade forge
+pipx upgrade forge-local-memory
 forge doctor --path .
 ```
 

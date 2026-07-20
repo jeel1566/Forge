@@ -37,7 +37,7 @@ The first vertical slice of the rule loop is implemented: a workspace selects ap
 ## Install and run the current local core
 
 ```powershell
-pipx install forge
+pipx install forge-local-memory
 forge install codex
 # or, from a project: forge install antigravity --path .
 forge doctor --path .

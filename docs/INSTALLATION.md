@@ -17,7 +17,7 @@ Codex and Antigravity use Forge directly on the same computer. They do not need 
 Install the published package once:
 
 ```powershell
-pipx install forge
+pipx install forge-local-memory
 forge doctor --path .
 ```
 
