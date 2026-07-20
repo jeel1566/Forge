@@ -42,7 +42,10 @@ def run_validation(store: Store, workspace_id: str, label: str, command: list[st
     if timeout_seconds < 1 or timeout_seconds > 3_600:
         raise ValueError("Validation timeout must be between 1 and 3600 seconds.")
     executable = command[0]
-    if os.name == "nt" and not executable.lower().endswith((".exe", ".bat", ".cmd")):
+    repository_executable = Path(repository["path"]) / executable
+    if not Path(executable).is_absolute() and repository_executable.is_file():
+        command = [str(repository_executable), *command[1:]]
+    elif os.name == "nt" and not executable.lower().endswith((".exe", ".bat", ".cmd")):
         resolved = shutil.which(executable)
         if resolved:
             command = [resolved, *command[1:]]

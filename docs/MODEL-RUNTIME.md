@@ -12,6 +12,6 @@ No separate Forge chat archive was available in this repository to make claims a
 
 ## ChatGPT Apps
 
-ChatGPT Apps use MCP through the Apps SDK, but ChatGPT connects to remote MCP servers rather than Forge's current local stdio process. Reusing Forge for a ChatGPT App would require a deliberate secure tunnel or remote transport design; it must preserve the same privacy, evidence, and no-secret boundaries.
+ChatGPT Apps use MCP through the Apps SDK, but ChatGPT connects to remote MCP servers rather than Forge's local stdio process. Forge provides `forge mcp-http --path .`, a separate loopback-only Streamable HTTP MCP server with safe read tools only. OpenAI's separately installed Secure MCP Tunnel client supplies the remote connection without publicly exposing Forge. The regular Codex and Antigravity stdio MCP server retains the developer-reviewed write workflow. See the [installation guide](INSTALLATION.md#4-optional-chatgpt-web-connector) for the real tunnel lifecycle and security boundaries.
 
-Useful official references: [Build with the Apps SDK](https://help.openai.com/en/articles/12515353-build-with-the-apps-sdk.iso) and [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/articles/12584461).
+Useful official references: [Build with the Apps SDK](https://help.openai.com/en/articles/12515353-build-with-the-apps-sdk) and [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt-beta).

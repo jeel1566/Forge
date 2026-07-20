@@ -161,6 +161,17 @@ class RuleApproval(BaseModel):
     developer_approved: bool
 
 
+class ReusableRuleOverride(BaseModel):
+    action: str = Field(pattern="^(ignore|replace)$")
+    statement: str | None = Field(default=None, min_length=1, max_length=4000)
+
+
+class SessionFeedback(BaseModel):
+    context_useful: str = Field(pattern="^(yes|partly|no)$")
+    irrelevant_or_missing: str = Field(min_length=1, max_length=4000)
+    rule_assessment: str = Field(pattern="^(approve|revise|coaching_only|reject)$")
+
+
 class RuleVerification(BaseModel):
     result: str = Field(pattern="^(supported|contradicted|insufficient_data)$")
     evidence_span_id: str = Field(min_length=1)
@@ -242,6 +253,43 @@ def rules(workspace_id: str, state: str | None = None):
     return store.list_rule_versions(workspace_id, state)
 
 
+@app.post("/v1/rules/{rule_version_id}/reusable-request")
+def request_reusable_rule(rule_version_id: str):
+    try:
+        return store.request_reusable_rule(rule_version_id)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.get("/v1/workspaces/{workspace_id}/reusable-rules")
+def reusable_rules(workspace_id: str, scope: str | None = None):
+    return store.reusable_rules(workspace_id, scope)
+
+
+@app.get("/v1/reusable-rules")
+def reusable_rule_requests(state: str = "pending"):
+    try:
+        return store.reusable_rule_requests(state)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.post("/v1/reusable-rules/{reusable_rule_id}/approval")
+def approve_reusable_rule(reusable_rule_id: str, body: RuleApproval):
+    try:
+        return store.approve_reusable_rule(reusable_rule_id, body.developer_approved)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.put("/v1/workspaces/{workspace_id}/reusable-rules/{reusable_rule_id}/override")
+def override_reusable_rule(workspace_id: str, reusable_rule_id: str, body: ReusableRuleOverride):
+    try:
+        return store.set_reusable_rule_override(workspace_id, reusable_rule_id, body.action, body.statement)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
 @app.get("/v1/workspaces/{workspace_id}/learning-cards")
 def learning_cards(workspace_id: str, state: str | None = None):
     return store.learning_cards(workspace_id, state)
@@ -276,6 +324,14 @@ def review_learning_alert(alert_id: str, body: LearningAlertReview):
 @app.get("/v1/workspaces/{workspace_id}/session-start-context")
 def session_start_context(workspace_id: str, scope: str | None = None):
     return store.session_start_context(workspace_id, scope)
+
+
+@app.post("/v1/workspaces/{workspace_id}/handoffs/{handoff_id}/feedback")
+def record_session_feedback(workspace_id: str, handoff_id: str, body: SessionFeedback):
+    try:
+        return store.record_session_feedback(workspace_id, handoff_id, **body.model_dump())
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
 
 
 @app.post("/v1/workspaces/{workspace_id}/handoffs", status_code=201)

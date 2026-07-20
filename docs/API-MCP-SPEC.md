@@ -22,6 +22,12 @@ The tools listed as **current** exist in the local implementation. The **v1 targ
 
 Current MCP never reads a transcript, returns secrets, or silently promotes a record to memory.
 
+## ChatGPT HTTP MCP transport
+
+`forge mcp-http --path . --port 8765` starts a separate Streamable HTTP endpoint at `http://127.0.0.1:8765/mcp`. It binds to loopback only and requires an existing initialized Forge database. It is intentionally read-only: it offers only compact persisted context, handoffs, work/learning history, safe evidence metadata, rules, alerts, vault search, coordination, and GitHub sync status. It excludes every write, validation execution, approval, and projection tool.
+
+ChatGPT connects through OpenAI Secure MCP Tunnel; Forge does not open a public listener or implement its own tunnel. The tunnel provider and ChatGPT Developer Mode control authentication and app authorization. Forge's transport remains safe when GitHub is offline and never returns tokens, transcripts, headers, raw command output, or raw GitHub response bodies.
+
 ## Learning-card MCP tools
 
 | Tool | Role |
