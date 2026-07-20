@@ -100,7 +100,7 @@ function App() {
       get<ProjectionStatus | null>(`/v1/workspaces/${workspace}/projection-status`, null).then(result => setProjectionStatus(normalizeProjectionStatus(result))),
       get<SessionHandoff[]>(`/v1/workspaces/${workspace}/handoffs`, []).then(result => setHandoffs(safeList<SessionHandoff>(result).map(normalizeHandoff))),
       get<Evidence[]>(`/v1/workspaces/${workspace}/evidence`, []).then(setEvidence),
-      get<GitHubPollStatus | null>(`/v1/workspaces/${workspace}/github/status`, null).then(setGithubPolling)
+      get<GitHubPollStatus | null>(`/v1/workspaces/${workspace}/github/status`, null, true).then(setGithubPolling)
     ]);
     setLoaded(true);
   };
