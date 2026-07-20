@@ -68,10 +68,6 @@ class Review(BaseModel):
     statement: str | None = Field(default=None, min_length=1)
 
 
-class Intention(BaseModel):
-    statement: str = Field(min_length=1)
-
-
 class GitImport(BaseModel):
     path: str = "."
 
@@ -91,41 +87,6 @@ class GitHubCredentials(BaseModel):
 class GitHubPollingConfig(BaseModel):
     enabled: bool
     interval_seconds: int = Field(default=900, ge=60, le=86_400)
-
-
-class AgentsGuardrailHandoff(BaseModel):
-    statement: str = Field(min_length=1)
-    current_agents_content: str = ""
-    target_agents_path: str = "AGENTS.md"
-
-
-class AgentsGuardrailCompletion(BaseModel):
-    developer_approved: bool
-    resulting_agents_content: str
-
-
-class ReflectionReview(BaseModel):
-    status: str
-
-
-class SessionContextReview(BaseModel):
-    status: str
-
-
-class StructuredSessionHandoff(BaseModel):
-    agent: str = Field(min_length=1)
-    worktree_path: str = Field(min_length=1)
-    branch: str = Field(min_length=1)
-    evidence_span_ids: list[str] = Field(min_length=1)
-    template: dict
-    base_commit: str | None = None
-    head_commit: str | None = None
-
-
-class StructuredDecision(BaseModel):
-    source_session_context_id: str = Field(min_length=1)
-    evidence_span_ids: list[str] = Field(min_length=1)
-    template: dict
 
 
 class RulePolicy(BaseModel):
@@ -220,19 +181,9 @@ def register_repository(body: RepositoryRegistration):
     return {"workspace_id": workspace_id, "repository": store.repository(workspace_id), "import": result}
 
 
-@app.get("/v1/workspaces/{workspace_id}/today")
-def today(workspace_id: str):
-    return store.today(workspace_id)
-
-
 @app.get("/v1/workspaces/{workspace_id}/decisions")
 def decisions(workspace_id: str):
     return store.list_decisions(workspace_id)
-
-
-@app.get("/v1/workspaces/{workspace_id}/context")
-def context(workspace_id: str):
-    return store.context(workspace_id)
 
 
 @app.get("/v1/workspaces/{workspace_id}/learning")
@@ -440,27 +391,9 @@ def configure_coordination(workspace_id: str, body: CoordinationConfig):
     return store.set_coordination_base_ref(workspace_id, body.base_ref)
 
 
-@app.get("/v1/workspaces/{workspace_id}/history")
-def history(workspace_id: str):
-    return store.history(workspace_id)
-
-
-@app.get("/v1/workspaces/{workspace_id}/session-contexts")
-def session_contexts(workspace_id: str, status: str | None = None, query: str | None = None, scope: str | None = None, file_path: str | None = None, include_archived: bool = False, limit: int = 100):
-    return store.list_session_contexts(workspace_id, status=status, query_text=query, scope=scope, file_path=file_path, include_archived=include_archived, limit=max(1, min(limit, 100)))
-
-
 @app.get("/v1/workspaces/{workspace_id}/decisions/retrieve")
 def retrieve_decisions(workspace_id: str, file_path: str | None = None, scope: str | None = None, category: str | None = None, status: str | None = "confirmed", limit: int = 20):
     return store.retrieve_decisions(workspace_id, file_path=file_path, scope=scope, category=category, status=status, limit=limit)
-
-
-@app.post("/v1/workspaces/{workspace_id}/decisions", status_code=201)
-def create_structured_decision(workspace_id: str, body: StructuredDecision):
-    try:
-        return store.create_structured_decision(workspace_id, **body.model_dump())
-    except ValueError as error:
-        raise HTTPException(422, str(error)) from error
 
 
 @app.get("/v1/workspaces/{workspace_id}/evidence")
@@ -474,27 +407,6 @@ def evidence_detail(evidence_id: str):
     if not result:
         raise HTTPException(404, "evidence not found")
     return result
-
-
-@app.get("/v1/workspaces/{workspace_id}/agents-guardrails")
-def agents_guardrails(workspace_id: str):
-    """Cited candidates only; Forge never reads or writes AGENTS.md."""
-    return store.guardrail_candidates(workspace_id)
-
-
-@app.get("/v1/workspaces/{workspace_id}/approved-guardrails")
-def approved_guardrails(workspace_id: str):
-    return store.approved_guardrails(workspace_id)
-
-
-@app.get("/v1/workspaces/{workspace_id}/portable-guardrails")
-def portable_guardrails(workspace_id: str):
-    return store.portable_guardrails(workspace_id)
-
-
-@app.get("/v1/workspaces/{workspace_id}/agents-guardrail-handoffs")
-def agents_guardrail_handoffs(workspace_id: str):
-    return store.list_agents_guardrail_handoffs(workspace_id)
 
 
 @app.get("/v1/connectors/github")
@@ -555,12 +467,6 @@ def import_git(workspace_id: str, body: GitImport):
         raise HTTPException(422, str(error)) from error
 
 
-@app.post("/v1/workspaces/{workspace_id}/intention", status_code=201)
-def set_intention(workspace_id: str, body: Intention):
-    store.set_intention(workspace_id, body.statement)
-    return store.active_intention(workspace_id)
-
-
 @app.post("/v1/decisions/{decision_id}/review")
 def review(decision_id: str, body: Review):
     if body.status not in {"confirmed", "rejected"}:
@@ -571,25 +477,6 @@ def review(decision_id: str, body: Review):
     if "error" in result:
         raise HTTPException(409, result["error"])
     return result
-
-
-@app.post("/v1/reflections/{reflection_id}/review")
-def review_reflection(reflection_id: str, body: ReflectionReview):
-    if body.status not in {"confirmed", "dismissed"}:
-        raise HTTPException(422, "status must be confirmed or dismissed")
-    result = store.review_reflection(reflection_id, body.status)
-    if not result:
-        raise HTTPException(404, "reflection not found")
-    if "error" in result:
-        raise HTTPException(409, result["error"])
-    return result
-
-
-@app.post("/v1/memory/{entry_id}/archive")
-def archive_memory(entry_id: str):
-    if not store.archive_memory(entry_id):
-        raise HTTPException(404, "active memory entry not found")
-    return {"archived": True}
 
 
 dashboard = Path(__file__).resolve().parent / "static" / "index.html"
