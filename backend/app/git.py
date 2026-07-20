@@ -54,7 +54,7 @@ def ingest_repository(store: Store, workspace_id: str, path: str | Path) -> dict
         commit, author, occurred_at, subject = record.strip().split("\x1f", 3)
         if store.has_evidence(workspace_id, "git_commit", commit):
             continue
-        files = [item for item in git_output(repository, "diff-tree", "--no-commit-id", "--name-only", "-r", "-m", commit).splitlines() if item]
+        files = list(dict.fromkeys(item for item in git_output(repository, "diff-tree", "--no-commit-id", "--name-only", "-r", "-m", commit).splitlines() if item))
         summary = f"Commit {commit[:12]} changed {len(files)} file(s)."
         store.create_evidence(workspace_id, "git_commit", subject, summary, subject, commit, {"commit": commit, "repository": str(repository), "author": author, "occurred_at": occurred_at, "branch": branch, "files": files})
         imported += 1

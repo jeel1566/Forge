@@ -40,13 +40,15 @@ class GitHubRepositoryTests(unittest.TestCase):
                 if arguments[0] == "log":
                     return "merge-commit\x1fauthor\x1f2026-07-20T00:00:00Z\x1fMerge feature\x1e"
                 if arguments[0] == "diff-tree":
-                    return "backend/app/store.py"
+                    return "backend/app/store.py\nbackend/app/store.py"
                 raise AssertionError(arguments)
 
             try:
                 with patch("backend.app.git.git_output", side_effect=output), patch("backend.app.git.optional_git_output", return_value=""), patch("backend.app.git.git_common_dir", return_value=str(repository / ".git")):
                     ingest_repository(store, "default", repository)
                 self.assertIn(("diff-tree", "--no-commit-id", "--name-only", "-r", "-m", "merge-commit"), calls)
+                evidence = store.get_evidence(store.list_evidence("default", "git_commit")[0]["id"])
+                self.assertEqual(["backend/app/store.py"], evidence["metadata"]["files"])
             finally:
                 store.close()
 

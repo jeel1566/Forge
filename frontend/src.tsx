@@ -80,9 +80,10 @@ function App() {
   const [feedbackAssessment, setFeedbackAssessment] = useState("approve");
   const [error, setError] = useState("");
 
-  const get = async <T,>(path: string, fallback: T) => {
+  const get = async <T,>(path: string, fallback: T, allowNotFound = false) => {
     try {
       const response = await fetch(`${api}${path}`);
+      if (allowNotFound && response.status === 404) return fallback;
       if (!response.ok) {
         setError(`Forge returned ${response.status}. Retry after the local dashboard is ready.`);
         return fallback;
@@ -94,7 +95,7 @@ function App() {
     }
   };
   const loadWorkspace = () => {
-    void get<Repository | null>(`/v1/workspaces/${workspace}/repository`, null).then(setRepository);
+    void get<Repository | null>(`/v1/workspaces/${workspace}/repository`, null, true).then(setRepository);
     void get<Coordination | null>(`/v1/workspaces/${workspace}/coordination`, null).then(setCoordination);
     void get<{ policy: RulePolicy } | null>(`/v1/workspaces/${workspace}/learning`, null).then(result => setPolicy(result?.policy ?? null));
     void get<ReusableRule[]>(`/v1/workspaces/${workspace}/reusable-rules`, []).then(result => setReusableRules(safeList<ReusableRule>(result)));
