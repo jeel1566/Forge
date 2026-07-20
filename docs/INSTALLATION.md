@@ -1,141 +1,150 @@
-# Forge installation guide
+# Install and operate Forge
 
-This guide installs Forge for Codex or Antigravity and, optionally, connects its **read-only** project memory to ChatGPT. Forge stays local-first: every project keeps its own SQLite database in `.forge\forge.sqlite3`; Forge never reads chat transcripts.
+Forge is local-first. Each repository stores its data in `.forge/forge.sqlite3`; normal Codex and Antigravity use does not need a cloud account, tunnel, dashboard, or GitHub token.
 
-## Choose your setup
+## Prerequisites
 
-| Where you use Forge | Install once | Start when working | Optional dashboard |
-|---|---|---|---|
-| Codex | `forge install codex` | Agent instruction starts a local Forge session | MCP tool starts it when requested |
-| Antigravity | `forge install antigravity --path .` | Agent instruction starts a local Forge session | Antigravity sidecar |
-| ChatGPT web | Secure MCP Tunnel setup | Forge HTTP server and tunnel client | No dashboard required |
+- Python 3.11 or newer.
+- `pipx` for a global isolated CLI install.
+- Git for repository registration and local evidence.
+- Node.js plus `pnpm` only when developing Forge from source or running the dashboard build.
 
-Codex and Antigravity use Forge directly on the same computer. They do not need a tunnel, OpenAI Platform key, or public server. ChatGPT web is optional and uses a separate read-only connection.
+## Install the CLI
 
-## 1. Install Forge
-
-Install the published package once:
+The public package name is `forge-local-memory`; its command is `forge`.
 
 ```powershell
-pipx install forge-local-memory
-forge doctor --path .
+# Before the first PyPI publication
+pipx install "git+https://github.com/jeel1566/Forge.git@main"
+
+# After the PyPI release is published
+# pipx install forge-local-memory
+
+forge --help
 ```
 
-For a source checkout during development, run its commands from the repository with `python -m backend.app.cli ...` if your installed `forge` command has not yet been upgraded.
+For a source checkout, use `python -m backend.app.cli ...` or `pipx install .` from the repository root.
 
-## 2. Install one coding agent
+## Install one agent
 
-Install only the agent you use. Re-running either command is safe.
+Choose the agent you use. Each command changes only that agent's Forge-owned MCP entry, instruction block, and Forge End skill.
 
 ```powershell
 forge install codex
+
+# Run inside a repository when Antigravity should also own a dashboard sidecar.
 forge install antigravity --path .
 ```
 
-The Codex installer changes only `~/.codex`. The Antigravity installer changes only `~/.gemini` and, with `--path .`, creates that repository's dashboard sidecar. Both add a marked Forge instruction block and a Forge End skill. They preserve unrelated MCP servers and agent instructions.
+Restart the chosen agent once so it discovers the MCP server. Check setup without changing data:
 
-Restart the selected agent once after installation so it discovers the MCP configuration.
+```powershell
+forge doctor --path . --agent codex
+forge doctor --path . --agent antigravity
+```
 
-## 3. Normal local session
+Re-run the installer safely, or repair only Forge-owned files:
 
-At the start of meaningful work, Forge's managed agent instruction runs:
+```powershell
+forge install codex --dry-run
+forge install codex --repair
+forge repair codex
+forge uninstall codex
+```
+
+## Start and finish an agent session
+
+The managed agent instruction performs this automatically at meaningful session start. You can run it manually to diagnose setup:
 
 ```powershell
 forge session-start --path . --agent codex
 ```
 
-It creates or reuses the current project's `.forge\forge.sqlite3` and returns a session ID. The agent then reads compact context through Forge MCP. At `/forge_end`, the agent runs configured checks, saves one transcript-free cited handoff, and releases that same session ID.
+Keep the returned `session_id`. The agent then calls `forge_get_session_start_context`. When the developer types `/forge_end`, the installed skill runs applicable configured validations, saves a structured Session Handoff with `forge_complete_session`, displays persisted alerts, and releases the same session.
 
-The dashboard is optional. Codex starts it through `forge_start_dashboard`; Antigravity uses its project sidecar. Local MCP and SQLite do not require a dashboard server.
+Manual release is intentionally strict:
 
-## 4. Optional ChatGPT web connector
+```powershell
+forge session-end --path . --session-id <session-id>
+```
 
-### What this adds
+Use `--abandon --reason <fixed-reason>` only when the developer explicitly abandons a failed or incomplete session.
 
-ChatGPT web cannot launch Forge's local `forge-mcp` command. Forge therefore provides a separate loopback-only HTTP endpoint that exposes **read tools only**. OpenAI's Secure MCP Tunnel connects ChatGPT to that endpoint without exposing Forge publicly.
+## Dashboard
 
-This is optional. Do not set it up if you do not want to use an OpenAI Platform tunnel. It does not add ChatGPT write tools, validation execution, rule approval, dashboard access, tokens, transcripts, raw command output, or raw GitHub payloads.
+The dashboard is optional. MCP and SQLite work without it.
 
-### Requirements
+- **Codex:** call `forge_start_dashboard` through Forge MCP after session start.
+- **Antigravity:** `forge install antigravity --path .` creates a local sidecar that owns the dashboard.
+- **Manual development:** `forge start --path . --port 8000`, then open `http://127.0.0.1:8000`.
 
-- ChatGPT Developer Mode and Tunnel access for your workspace.
-- A tunnel created in [OpenAI Platform Tunnels](https://platform.openai.com/settings/organization/tunnels), scoped to the same ChatGPT workspace.
-- A restricted Platform runtime key with **Tunnels: Read + Use**. This is not a model key; never share it in chat, source control, Forge, or logs.
-- OpenAI's `tunnel-client` installed on the computer. Get it from Platform Tunnels or the [official releases](https://github.com/openai/tunnel-client/releases/latest).
+All dashboard/API listeners bind to `127.0.0.1`.
 
-### First-time connector setup
+## Trusted validation
 
-1. Create the tunnel in Platform Tunnels and copy its `tunnel_...` ID.
-2. Create the restricted runtime key in [Platform Runtime API Keys](https://platform.openai.com/settings/organization/api-keys). Keep it private.
-3. Start Forge's read-only HTTP endpoint in one PowerShell window:
+Put an allowlist in the repository root. Forge runs these argument arrays without a shell and stores only the validation ID, result, duration, config hash, scopes, and categories—not command output.
+
+```json
+{
+  "validations": [
+    {
+      "id": "backend-tests",
+      "argv": ["python", "-m", "unittest", "discover", "-s", "backend/tests", "-v"],
+      "scopes": ["backend"],
+      "categories": ["testing"],
+      "timeout_seconds": 900
+    }
+  ]
+}
+```
+
+Run a trusted entry by ID:
+
+```powershell
+forge validate-configured --path . backend-tests
+```
+
+`forge validate --label ... -- <command>` is manual/untrusted context and cannot advance or verify a Learning Card.
+
+## GitHub polling (optional)
+
+Register a repository and configure a fine-grained read-only GitHub token through the local dashboard/API only when PR/review evidence is useful. Polling is disabled by default. It reads pull requests, reviews, and review comments; it never writes GitHub data.
+
+Each poll is paginated, idempotent, bounded by configured page/item/time limits, protected against overlap, and resumes from persisted checkpoints. Safe telemetry includes status, timing, rate-limit state, retry state, partial status, and last success. It excludes tokens, authorization headers, and raw bodies.
+
+## ChatGPT web connector (optional, read-only)
+
+ChatGPT web cannot launch Forge's stdio MCP server. The optional connector uses a separate loopback HTTP endpoint and OpenAI's separately installed `tunnel-client`.
+
+1. Start a local session and HTTP endpoint:
 
    ```powershell
    forge session-start --path . --agent codex
    forge mcp-http --path . --port 8765
    ```
 
-4. Start the tunnel client in a second PowerShell window. Let it choose a free health port so a reserved `8080` port cannot block startup:
+2. Create an OpenAI Secure MCP Tunnel, then run the tunnel client with a restricted tunnel runtime key in your local shell. Do not paste that key into chat, source, Forge, or logs.
+3. In ChatGPT Developer Mode, create a Tunnel app using the `tunnel_...` ID—not the `127.0.0.1` URL—and scan tools.
 
-   ```powershell
-   $env:CONTROL_PLANE_API_KEY = "<runtime-key>"
-   $healthFile = Join-Path $env:TEMP "forge-tunnel-health.url"
+This transport exposes read tools only: context, handoffs, evidence metadata, cards, rules, alerts, vault search, coordination, decisions, and GitHub status. It never exposes Forge writes, validation execution, approval, secrets, transcripts, raw output, or raw GitHub payloads.
 
-   tunnel-client run --control-plane.tunnel-id "tunnel_..." --control-plane.api-key "env:CONTROL_PLANE_API_KEY" --mcp.server-url "http://127.0.0.1:8765/mcp" --health.listen-addr "127.0.0.1:0" --health.url-file "$healthFile"
-   ```
-
-5. In another window, confirm the tunnel is ready:
-
-   ```powershell
-   $healthUrl = Get-Content $env:TEMP\forge-tunnel-health.url
-   Invoke-WebRequest "$healthUrl/readyz"
-   ```
-
-   A successful response has status code `200`.
-
-6. In ChatGPT web, go to **Settings → Apps/Connectors → Create**, choose **Tunnel**, paste the same `tunnel_...` ID, choose **No Auth**, acknowledge the warning, then create the connector and scan tools.
-
-The form expects the tunnel ID, **not** `http://127.0.0.1:8765/mcp` and not the local health URL. After creation, Forge appears under ChatGPT Apps/Connectors or MCP with a development label; it is not an old-style Plugin entry.
-
-### Daily use and restart behavior
-
-Create the tunnel and ChatGPT connector once. For each computer restart or whenever the processes are closed, start both of these again while using ChatGPT:
-
-```powershell
-forge mcp-http --path . --port 8765
-tunnel-client run ...
-```
-
-Keep both windows open. The connector remains saved in ChatGPT, but it cannot retrieve Forge data while either local process is stopped. A later managed-runtime setup can supervise `tunnel-client`; this guide intentionally uses the visible foreground setup first.
-
-## Verify and repair
+## Maintenance and recovery
 
 ```powershell
 forge doctor --path .
-forge doctor --path . --agent codex
-forge repair codex
-forge uninstall codex
+forge repair --path .
+forge backup --path . --output .\forge-backup.sqlite3
+forge export --path . --output .\forge-export.json
+forge vault export --path .
 ```
 
-`doctor` is read-only. `repair` restores only Forge-managed agent configuration. `uninstall` removes only Forge's MCP entry, managed instructions, and Forge End skill; it never deletes a project's `.forge` data.
+`doctor` is read-only. `repair` removes only stale Forge runtime metadata or restores Forge-owned agent setup. `backup` and `export` never include connector secrets. `vault export` writes generated files under `.forge/vault`; edits to those files never become new Forge memory.
 
-## Troubleshooting
+## Upgrade
 
-| Problem | What to do |
-|---|---|
-| `forge` is not recognized | Open a new PowerShell after installation, or use `python -m backend.app.cli` from the source checkout. |
-| ChatGPT does not list Forge | Confirm the connector exists under Apps/Connectors, start a new chat, then enable Forge from the Apps/Tools picker. |
-| ChatGPT connector creation fails | Confirm the tunnel exists, its ID is correct, and it is scoped to the same ChatGPT workspace. |
-| `listen tcp 127.0.0.1:8080` fails | Use `--health.listen-addr "127.0.0.1:0"` and `--health.url-file` exactly as shown above. |
-| Tunnel is not ready | Keep Forge HTTP running, check `$healthUrl/readyz`, then inspect the tunnel-client terminal for its safe error message. |
-| A runtime key was pasted into chat or committed | Revoke it immediately, create a new restricted runtime key, and never paste the replacement key anywhere except your local PowerShell environment. |
+```powershell
+pipx upgrade forge-local-memory
+forge doctor --path .
+```
 
-## Security boundaries
-
-- Forge's SQLite data remains on the developer machine.
-- The HTTP endpoint binds only to `127.0.0.1`.
-- Secure MCP Tunnel is outbound from the developer machine; Forge does not open a public listener.
-- ChatGPT receives only the requested compact read-tool result.
-- Forge never persists or returns tokens, authorization headers, raw transcripts, raw command output, or raw GitHub response bodies.
-- Use Codex or Antigravity for developer-reviewed Forge writes; the ChatGPT transport is deliberately read-only.
-
-For OpenAI-side availability and permissions, see the [Developer Mode and MCP apps guide](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt-beta) and the [Secure MCP Tunnel guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
+For the first source-installed release, reinstall from GitHub with the same `pipx install --force "git+..."` command. See [Releasing Forge](RELEASING.md) for maintainers.

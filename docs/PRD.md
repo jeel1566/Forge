@@ -1,48 +1,31 @@
-# Product requirements
+# Forge product requirements
 
-## Outcome
+## Product outcome
 
-Forge gives coding agents one durable, local project memory. Codex and Antigravity summarise their own work at the end of a session; Forge preserves the reasoning, failure, fix, and evidence so the next agent can continue without repeating mistakes.
+Forge gives coding agents durable local project context without collecting private chats. It reduces repeated mistakes by preserving the decision, failed approach, fix, validation, and bounded rule lifecycle as cited local records.
 
-## Product loop
+## Shipped requirements
 
-```text
-agent retrieves scoped context
-→ agent works
-→ agent self-summarises decisions and failures
-→ Forge cites and evaluates the record
-→ a rule is approved or autonomously activated
-→ later work verifies, strengthens, or rolls back the rule
-```
-
-## Functional requirements
-
-| ID | Requirement |
+| Area | Requirement |
 |---|---|
-| FR-1 | Persist one rule policy per workspace: `approval` or `autonomous`; ask once during initialization. |
-| FR-2 | Let Codex and Antigravity retrieve compact, scoped context and submit their own structured session summary through MCP. |
-| FR-3 | Persist decisions: problem, prior approach, why it failed, options considered, chosen fix, reason, validation, and unresolved risk. |
-| FR-4 | Link every learning to local evidence; never treat raw chat or unsupported claims as proof. |
-| FR-5 | Maintain versioned rule states: observed, candidate, active, verified, contradicted, retracted, and archived. |
-| FR-6 | In approval mode, require an exact visible rule diff before activation. |
-| FR-7 | In autonomous mode, activate only evidence-gated scoped rules with a version, expiry/review point, and rollback path. |
-| FR-8 | Verify rules against later test, build, review, error, revert, and Git evidence; silence is `insufficient_data`. |
-| FR-9 | Detect repeated independently cited failure patterns before increasing a rule's confidence. |
-| FR-10 | Keep GitHub polling optional, local, restart-safe, bounded, idempotent, and non-blocking for all local Forge features. |
-| FR-11 | Show policy mode, health, evidence, active rules, partial-sync warnings, and recovery guidance in the dashboard. |
+| Local memory | Persist project handoffs, decisions, work items, incidents, evidence, and vault search in SQLite. |
+| Agent lifecycle | Install Codex or Antigravity separately; create/reuse per-repository leases; end with a cited handoff. |
+| Learning | Use Learning Cards with deterministic identity, duplicate/conflict alerts, trusted validation gates, review due dates, verification, and retraction. |
+| Rules | Support approval/autonomous policy, journaled managed-block projection, rollback, and reusable-rule approval across two repositories. |
+| Validation | Execute only checked-in argv allowlist entries as trusted proof; retain manual validation as untrusted context. |
+| GitHub | Optional read-only polling of PRs/reviews/comments with pagination, checkpoints, limits, retries, and safe telemetry. |
+| Product surface | Local dashboard, FastAPI API, stdio MCP writes, and ChatGPT-compatible read-only HTTP MCP. |
 
 ## Non-goals
 
-- Reading or uploading raw Codex, Antigravity, or ChatGPT transcripts.
-- Treating model output as self-validating evidence.
-- Auto-merging, conflict resolution, GitHub write operations, or modifying unrelated files.
-- Cloud storage, background services, vector databases, or mandatory model APIs.
-- Claiming that every future mistake can be prevented; Forge reduces repeated, evidenced mistakes.
+- Chat transcript extraction, hidden model training, or mandatory hosted AI.
+- Cloud storage, background SaaS infrastructure, or a permanent daemon.
+- Auto-merging, conflict resolution, GitHub write operations, automatic duplicate resolution, or automatic reusable-rule promotion.
+- Treating a model claim, Git commit, arbitrary shell command, or silence as activation proof.
 
-## Acceptance criteria
+## Acceptance signals
 
-- Two agents using the same workspace retrieve the same persisted active rules and cited decisions.
-- A failed test or review finding can be linked to a structured self-summary without importing the chat.
-- Re-running an import or session submission does not create duplicate evidence, decisions, or rule versions.
-- Autonomous activation cannot occur without the defined evidence threshold and rollback metadata.
-- A contradicted active rule is visible, traceable, and no longer served as active context.
+- A new agent can retrieve the last cited handoff and active scoped rules without exploring generated files.
+- An active rule is traceable to citations, validation configuration, and a projection record.
+- A conflicting observation is visible as an alert and cannot silently alter a rule.
+- Offline GitHub leaves local agent sessions, SQLite, dashboard, and MCP usable.

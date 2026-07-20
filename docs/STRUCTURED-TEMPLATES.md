@@ -1,22 +1,39 @@
-# Structured templates
+# Structured handoff and validation reference
 
-## Session outcome
+## Session Handoff
 
-An agent submits this from its own session, never as a raw transcript:
+The agent writes this from its own completed work. Required fields are `agent`, `worktree_path`, `branch`, `outcome_key`, `scope`, `category`, `goal`, `problem`, `prior_approach`, `why_prior_approach_failed`, `alternatives`, `chosen_fix`, `rationale`, `validation`, `risk`, `unresolved`, `proposed_rule`, and `evidence_span_ids`.
 
-| Field | Meaning |
+| Field | Requirement |
 |---|---|
-| `scope` | Files, module, or bounded task affected. |
-| `goal` | What the session attempted. |
-| `problem` | Error, failure, or decision point with citation. |
-| `prior_approach` | What existed before. |
-| `why_prior_approach_failed` | Concrete limitation, error, or trade-off. |
-| `alternatives` | Options considered and rejected. |
-| `chosen_fix` / `why` | What changed and why that option won. |
-| `validation` | Command/result or explicit `not_run`. |
-| `risk` / `unresolved` | Remaining uncertainty. |
-| `proposed_rule` | Condition → action → exception, or `none`. |
+| `outcome_key` | Stable unique key for idempotent retry. |
+| `scope` | Non-empty bounded files/modules/repository scope. |
+| `alternatives` | Array of `{option, reason}` entries; use `[]` when none. |
+| `validation` | Safe summary, not raw output. |
+| `evidence_span_ids` | Existing persisted evidence references. |
+| `proposed_rule` | A rule statement or `none`. |
+| Learning fields | Supply `learning_area`, `learning_trigger`, and `learning_action` together when proposing a rule. |
 
-## Rule record
+Use `unresolved`, not `unresolved_work`.
 
-A rule has a stable key, exact scope, version, policy mode, state, citations, activation evaluation, review/expiry time, projection hash, and rollback predecessor. It is never a free-form permanent instruction without provenance.
+## `forge.validation.json`
+
+```json
+{
+  "validations": [
+    {
+      "id": "diff-check",
+      "argv": ["git", "diff", "--check"],
+      "scopes": ["repository"],
+      "categories": ["testing"],
+      "timeout_seconds": 120
+    }
+  ]
+}
+```
+
+Forge runs `argv` directly without a shell. A configured run is trusted only when it passes and its current config hash, scope, and category apply to the handoff. `forge_run_validation` accepts an arbitrary command only as untrusted/manual context.
+
+## Rule statement
+
+Keep a proposed rule narrow and observable: condition → required action → exception. It must not request transcript capture, secret disclosure, auto-merge, conflict resolution, GitHub writes, or unrelated file edits.

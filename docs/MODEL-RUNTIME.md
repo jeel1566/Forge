@@ -1,17 +1,39 @@
-# Model runtime boundaries
+# Model and agent boundary
 
-## What Forge knows
+## Forge is not an AI model
 
-Forge knows the submitting agent identifier, a structured outcome, cited local evidence, and persisted rule/decision metadata. It does not know or store the raw Codex, Antigravity, ChatGPT, or other-agent conversation.
+Forge has no model provider SDK, no OpenAI API integration, no LangChain, no LlamaIndex, no vector database, and no hidden transcript reader. It does not choose a model, ask a model to summarise work, judge a model's reasoning, or train on Forge data.
 
-## GPT-5.6 in Codex
+Forge's role is deliberately smaller: durable local storage, deterministic evidence checks, rule lifecycle control, and retrieval through MCP.
 
-This repository has no direct GPT-5.6 SDK/API integration and no LangChain or LlamaIndex dependency. If a Codex session is configured to use GPT-5.6, that model is the reasoning agent: it reads repository instructions, retrieves Forge context through MCP, writes its own compact session summary, and submits it through MCP. Forge does not select, call, evaluate, or train the model.
+## Codex and GPT-5.6
 
-No separate Forge chat archive was available in this repository to make claims about prior GPT-5.6 sessions. This document therefore describes the architectural role, not a measured model-performance report.
+When Codex is configured with GPT-5.6, GPT-5.6 is the reasoning layer outside Forge. It can:
 
-## ChatGPT Apps
+1. Read the project's own instructions and active Forge rules.
+2. Retrieve compact persisted context through `forge_get_session_start_context`.
+3. Inspect code, change it, and run validations.
+4. Write a clean structured handoff from its own working context.
+5. Submit cited facts to Forge through MCP.
 
-ChatGPT Apps use MCP through the Apps SDK, but ChatGPT connects to remote MCP servers rather than Forge's local stdio process. Forge provides `forge mcp-http --path .`, a separate loopback-only Streamable HTTP MCP server with safe read tools only. OpenAI's separately installed Secure MCP Tunnel client supplies the remote connection without publicly exposing Forge. The regular Codex and Antigravity stdio MCP server retains the developer-reviewed write workflow. See the [installation guide](INSTALLATION.md#4-optional-chatgpt-web-connector) for the real tunnel lifecycle and security boundaries.
+Forge accepts the submitted structure and referenced local evidence; it does not receive the full Codex chat. The same boundary applies to Antigravity and any model it uses.
 
-Useful official references: [Build with the Apps SDK](https://help.openai.com/en/articles/12515353-build-with-the-apps-sdk) and [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt-beta).
+## What “Forge is the memory, not the brain” means
+
+| Responsibility | Agent/model | Forge |
+|---|---|---|
+| Understand a task and plan code | Yes | No |
+| Read private conversation context | Yes, inside its host | No |
+| Make code changes | Yes | No |
+| Run an approved local validation | Requests it | Records safe result and may execute configured argv |
+| Explain a decision or failure | Writes the handoff | Stores structured fields and citations |
+| Decide if a rule meets the evidence gate | Proposes evidence | Deterministic checks and developer policy |
+| Persist reusable local context | Reads/writes through MCP | Yes |
+
+The repository contains no raw-chat record that could establish a measured claim about how GPT-5.6 performed while Forge was built. Documentation therefore describes the implemented boundary, not an invented benchmark or transcript summary.
+
+## ChatGPT web
+
+ChatGPT web uses a separate read-only Streamable HTTP MCP endpoint at loopback. An OpenAI Secure MCP Tunnel can forward that endpoint when the developer explicitly starts it. ChatGPT receives only requested persisted facts and cannot call Forge write, approval, validation, or projection tools.
+
+See [Installation](INSTALLATION.md#chatgpt-web-connector-optional-read-only) and [API/MCP reference](API-MCP-SPEC.md).

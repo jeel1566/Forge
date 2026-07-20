@@ -1,88 +1,92 @@
 # Forge
 
-Forge is a local shared-memory system for coding agents. Codex and Antigravity summarise **their own** completed sessions, send short structured facts to Forge through MCP, and retrieve the same project context before later work.
+Forge is local-first project memory for coding agents. It lets Codex and Antigravity leave a compact, evidence-backed handoff for the next agent without turning developer chats into an archive.
 
-Forge is not a chat archive and does not silently read agent transcripts. Git, GitHub review data, test results, and agent-supplied summaries are evidence; Forge keeps the evidence local and makes the next agent's context traceable.
+Forge stores local facts: Session Handoffs, decisions, configured validation results, Learning Cards, scoped rules, Git/GitHub evidence, and safe runtime telemetry. SQLite is the source of truth; the dashboard and MCP tools are local views of that data.
 
-## New Forge: target architecture
+## What Forge does
 
-Forge v1 is moving from a review-only engineering notebook to an evidence-first learning loop. Each workspace chooses its rule policy once:
+- Starts one local Forge session per active agent and repository.
+- Gives the agent compact context: active project rules, approved reusable rules, decisions, alerts, and the latest handoff.
+- Saves a structured handoff at `/forge_end`: what changed, why, what failed before, alternatives, validation, risks, and unresolved work.
+- Creates evidence-gated Learning Cards and scoped `AGENTS.md` rules. A rule needs two independent, trusted configured-validation-backed handoffs before it can be activated.
+- Keeps rule activation reversible. Contradictory evidence retracts the rule and rolls back Forge's managed `AGENTS.md` block.
+- Optionally imports GitHub pull requests, reviews, and inline review comments using local-only, bounded, restart-safe polling.
 
-- **Approval mode** — Forge proposes a rule change; a developer approves it before it becomes active.
-- **Autonomous mode** — Forge activates only evidence-backed, scoped rules automatically, retains every version, and can roll back a rule when later evidence contradicts it.
+Forge is not a chat archive, cloud service, autonomous coding agent, GitHub writer, or merge bot.
 
-The choice is local to the workspace, visible in the dashboard, and can be changed deliberately. Autonomous mode does **not** mean unrestricted self-editing: Forge must never auto-merge, resolve conflicts, modify unrelated files, store raw transcripts, or create rules from an unsupported claim.
+## Architecture
 
 ```mermaid
 flowchart LR
-  A[Codex or Antigravity] -->|reads project rules + context| M[Forge MCP]
-  A -->|self-written session summary| M
-  G[Git, tests, reviews, errors] --> E[Local evidence]
-  M <--> D[(Forge SQLite)]
-  E --> D
-  D --> L[Decision and learning lifecycle]
-  L --> R[Scoped AGENTS.md rules]
-  R --> A
-  D --> UI[Local dashboard]
+  Agent[Codex or Antigravity] -->|start lease + read compact context| MCP[Forge MCP]
+  Agent -->|structured handoff + cited IDs| MCP
+  Git[Local Git] --> Evidence[Safe evidence]
+  Checks[Configured validations] --> Evidence
+  GitHub[Optional read-only GitHub polling] --> Evidence
+  MCP <--> SQLite[(Project SQLite)]
+  Evidence --> SQLite
+  SQLite --> Cards[Learning Cards and rule history]
+  Cards --> Projection[Managed AGENTS.md block]
+  SQLite --> Dashboard[Loopback dashboard/API]
 ```
 
-Read the full design in [the new architecture](docs/ARCHITECTURE.md) and [the seven-stage learning loop](docs/INGESTION-PIPELINE.md).
+Read the detailed [architecture](docs/ARCHITECTURE.md), [learning lifecycle](docs/INGESTION-PIPELINE.md), and [data model](docs/DATA-MODEL.md).
 
-## What works today
+## Install
 
-The current code runs locally: SQLite, local Git ingestion, optional GitHub PR/review polling, a loopback dashboard/API, and an MCP server for Codex and Antigravity. It can persist cited session handoffs and pending/confirmed decisions. GitHub polling is opt-in, paginated, bounded, idempotent, and retains only safe local telemetry.
-
-The first vertical slice of the rule loop is implemented: a workspace selects approval or autonomous mode, agents submit cited self-summaries with structured Learning Cards, and Forge records real local test/build results without storing command output. Two independent Forge-recorded validation results make a card eligible; Forge projects an eligible autonomous rule into its managed `AGENTS.md` block, and contradictory evidence retracts the rule and rolls the block back. Advanced pattern analysis and richer review history remain later work.
-
-## Install and run the current local core
+The PyPI distribution is named `forge-local-memory`; it installs the `forge` command. Until the first PyPI tag is published, install from GitHub instead.
 
 ```powershell
-pipx install forge-local-memory
+# Current source release
+pipx install "git+https://github.com/jeel1566/Forge.git@main"
+
+# After PyPI publication
+# pipx install forge-local-memory
+
+# Install Forge for one agent only
 forge install codex
-# or, from a project: forge install antigravity --path .
-forge doctor --path .
-forge session-start --path . --agent codex
+# or, inside a repository with an Antigravity dashboard sidecar:
+forge install antigravity --path .
 ```
 
-`forge install antigravity --path .` adds an enabled Antigravity-owned sidecar for that repository's loopback dashboard and prints its URL. Restart Antigravity once after installation so it discovers the sidecar. Forge stores its database at `.forge/forge.sqlite3` in the selected repository.
+Then restart the chosen agent. The full walkthrough, repair steps, upgrades, GitHub polling, dashboard ownership, and optional ChatGPT connector are in [Installation](docs/INSTALLATION.md).
 
-Install Forge for one agent at a time using the [installation guide](docs/INSTALLATION.md). The global MCP configuration uses `forge-mcp` without a fixed database path; each project session resolves its own `.forge` database. The agent reads context and submits its own structured end-of-session summary; Forge never extracts or uploads the raw conversation.
+## Daily agent loop
 
-## ChatGPT custom app (read-only)
+1. The installed agent instruction runs `forge session-start --path . --agent <agent>`.
+2. The agent calls `forge_get_session_start_context` and works normally.
+3. When the developer types `/forge_end`, the installed Forge End skill runs configured checks, records one transcript-free handoff, reports alerts, and releases that exact lease.
+4. The next agent reads the persisted handoff and relevant rules through MCP.
 
-Codex can launch Forge's local `forge-mcp` stdio server directly. ChatGPT cannot: it requires a remote MCP endpoint. Forge provides a separate **loopback-only, read-only** Streamable HTTP endpoint for the supported Secure MCP Tunnel flow. The full, security-first setup—including tunnel ID, runtime key, dynamic health port, restart behavior, and recovery—is in the [installation guide](docs/INSTALLATION.md#4-optional-chatgpt-web-connector).
+The dashboard is optional. MCP and SQLite continue to work when no dashboard server is running.
 
-```powershell
-forge session-start --path . --agent codex
-forge mcp-http --path . --port 8765
-```
+## GPT-5.6, Codex, and the “brain” boundary
 
-Its endpoint is `http://127.0.0.1:8765/mcp`. It exposes only persisted context, handoffs, evidence metadata, rules, alerts, vault search, and GitHub sync status—never Forge write tools, transcripts, tokens, raw command output, or raw GitHub payloads.
+Forge has no OpenAI API key, model SDK, LangChain, LlamaIndex, or internal LLM. It does not choose a model, read conversations, summarise chats, or train on the project.
 
-## GPT-5.6 and Codex
+If Codex is configured to use GPT-5.6, GPT-5.6 is the reasoning agent: it reads repository instructions, retrieves Forge context, makes code changes, runs checks, and writes its own clean handoff. Antigravity follows the same pattern with its own configured model. Forge is the durable memory and evidence gate, not the brain.
 
-`forge session-start` creates or reuses one local session lease for that repository and returns a unique `session_id`. MCP reads and writes the local SQLite database directly. For Antigravity, the repository sidecar owns the dashboard server. For Codex, the agent calls `forge_start_dashboard` through the persistent Forge MCP process, which owns the loopback dashboard for the session.
-
-Forge contains no LangChain, LlamaIndex, OpenAI API, or GPT-5.6 integration. If Codex is configured to use GPT-5.6, the model is the agent that writes the structured session summary and calls MCP; Forge treats it like any other agent and stores only the submitted summary and cited local evidence. See [model runtime boundaries](docs/MODEL-RUNTIME.md).
+This repository cannot prove or measure prior GPT-5.6 chat performance because Forge deliberately does not store raw chats. See [Model runtime boundaries](docs/MODEL-RUNTIME.md).
 
 ## Safety rules
 
-1. The local SQLite database is the source of truth; raw chat transcripts are never imported.
-2. Every learning links to concrete local evidence and includes a scope, outcome, and version history.
-3. A rule only applies to matching work; unsupported or contradicted rules are quarantined or rolled back.
-4. Forge never auto-merges, resolves conflicts, changes GitHub data, or exposes credentials.
-5. GitHub failure never prevents local Git, MCP, or the dashboard from working.
+1. Never store raw chat transcripts, tokens, authorization headers, raw command output, or raw GitHub response bodies.
+2. Never auto-merge, resolve conflicts, write GitHub data, or alter files outside Forge's managed `AGENTS.md` block.
+3. Only checked-in `forge.validation.json` commands run as trusted validation. Arbitrary commands remain untrusted context.
+4. Developer review decides duplicate/conflict handling, approval-mode activation, reusable-rule promotion, and non-validation verification inputs.
+5. GitHub polling is opt-in and failure-tolerant. Offline GitHub never blocks local Git, MCP, SQLite, or the dashboard.
+6. ChatGPT transport is loopback-only and read-only; Codex and Antigravity handle reviewed write workflows.
 
 ## Documentation
 
-- [Product requirements](docs/PRD.md)
-- [Architecture and diagram](docs/ARCHITECTURE.md)
-- [Seven-stage learning pipeline](docs/INGESTION-PIPELINE.md)
-- [MCP and API contract](docs/API-MCP-SPEC.md)
-- [Data model](docs/DATA-MODEL.md)
-- [Complete installation guide](docs/INSTALLATION.md)
-- [Codex and Antigravity setup reference](docs/AGENT-SETUP.md)
-- [Global agent installation and lifecycle design](docs/AGENT-LIFECYCLE-DESIGN.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Installation and operations](docs/INSTALLATION.md)
+- [Agent lifecycle](docs/AGENT-LIFECYCLE-DESIGN.md)
+- [MCP and HTTP API reference](docs/API-MCP-SPEC.md)
+- [Data model and retention](docs/DATA-MODEL.md)
+- [Learning pipeline](docs/INGESTION-PIPELINE.md)
 - [Model runtime boundaries](docs/MODEL-RUNTIME.md)
-- [Implementation plan](docs/IMPLEMENTATION-PLAN.md)
-- [Local setup](docs/OPEN-SOURCE-SETUP.md)
+- [Validation configuration](docs/STRUCTURED-TEMPLATES.md)
+- [Release process](docs/RELEASING.md)
+- [Documentation map](docs/DOCUMENTATION.md)

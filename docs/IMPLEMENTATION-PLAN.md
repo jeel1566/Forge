@@ -1,4 +1,6 @@
-# New Forge implementation plan
+# Historical implementation record
+
+> This page records the earlier implementation plan. The described vertical slice and product surface are now shipped; use the README and architecture documents for current behavior.
 
 ## Principle
 

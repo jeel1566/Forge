@@ -1,14 +1,15 @@
-# Demo runbook
+# Forge demo runbook
 
-## Demonstrate the current build
+## Five-minute demonstration
 
-1. Install and run Forge locally.
-2. Import local Git evidence and optionally poll a GitHub repository.
-3. Use MCP to retrieve context and submit one cited session handoff or pending decision.
-4. Show the dashboard evidence, decision status, and GitHub health.
+1. Run `forge session-start --path . --agent codex` in a real Git repository.
+2. Show `forge doctor --path .` and open the local dashboard if wanted.
+3. Call `forge_get_session_start_context`; explain that it returns persisted local facts, not chat history.
+4. Run a configured validation such as `forge validate-configured --path . backend-tests`.
+5. Submit a cited Session Handoff through MCP and show it in the dashboard or vault.
+6. Show a Learning Card moving from observation to ready after two independent trusted observations.
+7. Explain that duplicate/conflict alerts require developer review and that contradiction retracts an active rule.
 
-## Demonstrate the new Forge design
+## Safety demonstration
 
-Use the architecture diagram to explain the planned loop: Codex and Antigravity each summarise their own session, Forge evaluates cited local evidence, and a per-workspace policy controls whether a rule waits for approval or can be autonomously projected with rollback.
-
-Do not present autonomous projection or GPT-5.6 integration as shipped functionality until the target MCP tools and migrations are implemented.
+Show that the handoff contains no transcript or raw output, GitHub status contains no token, and ChatGPT HTTP lists only read tools. The tunnel client is optional and external to Forge.

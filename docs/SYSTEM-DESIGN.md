@@ -1,37 +1,33 @@
-# System design
+# System design and invariants
 
-## Canonical record
+## Source of truth
 
-SQLite is Forge's canonical memory. `AGENTS.md` is a generated, human-readable projection of active scoped rules, not the source of truth. Each rule version links back to a decision, session summary, and immutable evidence.
-
-## Learning state machine
-
-```mermaid
-stateDiagram-v2
-  [*] --> observed
-  observed --> candidate: structured summary + citation
-  candidate --> active: approval or autonomous gate
-  active --> verified: later supporting evidence
-  active --> contradicted: later conflicting evidence
-  contradicted --> retracted: rollback
-  active --> archived: superseded or expired
-  candidate --> archived: rejected or insufficient evidence
-```
+Project SQLite is Forge's source of truth. `AGENTS.md` is only a generated projection of active scoped rules inside Forge's marked block. The dashboard, MCP, vault export, and API read persisted local data.
 
 ## Invariants
 
-1. Forge stores no raw chat transcript; agents submit their own short structured summaries.
-2. Every rule version has scope, provenance, evidence IDs, activation mode, and state history.
-3. Approval mode never activates a rule before explicit approval of its exact projection.
-4. Autonomous mode never activates a rule without a deterministic evidence threshold, a rollback record, and a review/expiry time.
-5. Later silence is `insufficient_data`, never confirmation.
-6. Rules cannot grant permission to merge, resolve conflicts, expose secrets, or write GitHub data.
-7. Local functionality remains available when GitHub or the network is unavailable.
+1. Agents submit their own structured handoffs; Forge never reads a transcript store.
+2. Evidence links are immutable and every new learning record cites them.
+3. Only trusted configured validation can automatically advance, activate, verify, or retract a Learning Card.
+4. Duplicate/conflict and reusable-rule decisions remain developer-controlled.
+5. A manual edit inside Forge's managed `AGENTS.md` block blocks projection and creates a repair alert; text outside the block is preserved.
+6. Rule projection is atomic, journaled, versioned, and reversible.
+7. Network loss never blocks local Forge operations.
+8. No secret, raw command output, raw GitHub payload, authorization header, or raw chat enters normal persistence or transport output.
 
-## Evidence quality
+## Policy modes
 
-Strong evidence is a failed/passing verification command, Git change, reviewed PR comment, reproducible error, revert, or explicitly linked external record. Agent prose explains context but cannot alone raise a rule to active status.
+| Mode | Activation path |
+|---|---|
+| `approval` | Ready, unflagged card → exact projection diff → developer approval → active. |
+| `autonomous` | Ready, unflagged card with two independent trusted observations → active. |
 
-## Retention
+Both modes use the same evidence gate, review date, projection journal, verification, and rollback behavior.
 
-Keep active rules and their provenance until superseded or archived. Retain sync diagnostics for a bounded local window (currently 30 days and 500 events). Never retain tokens, authorization headers, or raw sensitive GitHub responses.
+## Operational limits
+
+- Trusted validation uses only checked-in argv arrays and per-entry timeouts.
+- GitHub polling has page, item, and time limits and reports `partial` when a boundary is reached.
+- GitHub retry uses bounded exponential backoff with jitter and respects `Retry-After`/rate-limit resets.
+- Sync telemetry is compact and bounded to 30 days or 500 events.
+- Reusable rules never leave the developer machine; they are a separate local SQLite registry.

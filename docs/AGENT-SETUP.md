@@ -17,10 +17,10 @@ The installer also adds a Forge-owned global `forge-end` skill for that selected
 
 `forge install codex --dry-run` shows the intended Forge-owned changes without writing files. Re-running `forge install codex` is safe and reports whether setup is healthy; use `forge install codex --repair` or `forge repair codex` only to restore missing Forge-owned MCP entries, managed instructions, and the Forge End skill. Forge refuses to overwrite incomplete managed markers or a non-Forge skill.
 
-For a pinned pre-release from this repository:
+For the current source version before the first PyPI release:
 
 ```powershell
-pipx install "git+https://github.com/jeel1566/Forge.git@v0.1.0"
+pipx install "git+https://github.com/jeel1566/Forge.git@main"
 ```
 
 ## Start a project session
@@ -122,7 +122,7 @@ At the beginning of later sessions, `forge_get_session_start_context` returns ap
 
 After a real session, Forge asks only three questions: whether the retrieved context was useful, what was irrelevant or missing, and whether the proposed rule should be approved, revised, coaching-only, or rejected. `forge_record_session_feedback` stores those explicit answers as cited local review data. It never reads chats or uses the feedback for hidden model training.
 
-## Policy modes: v1 target
+## Policy modes
 
 During `forge_initialize_workspace`, Forge asks once whether this workspace uses `approval` or `autonomous` rules. In approval mode, the agent shows the exact managed `AGENTS.md` diff before activation. In autonomous mode, Forge may update only its managed rule section after its evidence gate succeeds; every update is versioned and reversible.
 

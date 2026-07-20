@@ -1,34 +1,29 @@
-# Seven-stage Forge learning pipeline
+# Forge learning pipeline
 
-## 1. Collect
+## 1. Start with persisted context
 
-Forge collects local Git facts, optional GitHub PR/review facts, and a voluntary structured summary from the agent that just completed work. Codex summarises Codex; Antigravity summarises Antigravity. Neither is asked to summarise the other agent's private conversation.
+An installed agent starts a local session lease and calls `forge_get_session_start_context`. The compact response contains persisted rules, reusable rules, decisions, alerts, and latest handoff—not a reconstructed chat summary.
 
-## 2. Cite evidence
+## 2. Work and collect safe evidence
 
-The agent cites existing commits, changed paths, tests, errors, PRs, reviews, or review comments. Forge records immutable evidence references rather than raw transcripts or complete API payloads.
+Forge can record local Git facts, configured validation results, optional GitHub review facts, work items, and incidents. GitHub polling is optional and read-only. An agent never uploads its chat transcript.
 
-## 3. Record the decision
+## 3. Write a Session Handoff
 
-The summary must state: what changed, why, prior approach, why it was wrong or removed, alternatives considered, chosen fix, verification, and unresolved risk. Unknown fields are explicitly `unknown` or `not_run`.
+At `/forge_end`, the working agent writes its own structured account: goal, scope, problem, previous approach, why it failed, alternatives, chosen fix, rationale, validation, risk, unresolved work, and optional proposed rule. It cites existing evidence span IDs.
 
-## 4. Evaluate a learning candidate
+## 4. Gate rule evidence
 
-Forge de-duplicates the candidate and verifies that it has a narrow scope and adequate evidence. Weak records remain observations; they cannot become an active instruction.
+Only configured validations from the checked-in `forge.validation.json` can move a Learning Card toward activation. The validation must pass, use the current configuration hash, and cover the rule category and all affected scopes. Manual commands, prose, commits, and GitHub findings are useful context but not automatic activation proof.
 
-## 5. Verify later evidence
+## 5. Match, alert, and review
 
-Later work can support, contradict, or leave the candidate/rule as `insufficient_data`. Tests, reviews, reverts, recurring errors, and Git history are preferred verification signals.
+Forge normalizes scope, area, trigger, and action. Exact identity reuses a card. Similar identity produces a possible duplicate; same scope/area/trigger with a different action produces a possible conflict. Forge never merges, resolves, or activates either flagged card automatically.
 
-## 6. Detect repetition
+## 6. Activate and project safely
 
-Repeated independently cited observations in the same scope can raise confidence. The baseline target is two separate same-category observations before presenting or autonomously activating a reusable rule; individual high-risk rule classes may require approval regardless of mode.
+Two independently cited applicable trusted handoffs make a card `ready`. Approval mode shows an exact Forge-managed `AGENTS.md` diff and waits. Autonomous mode can activate a ready unflagged card. Projection uses a durable journal, managed-block hash checks, temporary-file replacement, and startup reconciliation.
 
-## 7. Publish, review, or roll back
+## 7. Verify, reuse, or retract
 
-Forge projects active rules into the managed section of `AGENTS.md`:
-
-- **Approval mode:** shows a precise diff and waits for approval.
-- **Autonomous mode:** applies only an evidence-gated rule version and records the prior version for rollback.
-
-The next agent retrieves the active rule and decision context through MCP. A contradicted rule is retracted and excluded from active context.
+Later trusted validation can verify or contradict a rule. Git changes, GitHub reviews, and local failures are stored as verification inputs and require developer confirmation before they change a rule. Contradiction retracts an active rule and rolls back its managed block. A reusable rule needs two evidence-gated active project rules from different repositories, then explicit approval; local project overrides win.

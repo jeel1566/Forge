@@ -1,26 +1,26 @@
-# Decision, verification, and rule evolution
+# Decisions, verification, and coaching
 
-Forge does not use a hidden extractor. The working agent produces a structured reflection from its own session, then Forge applies deterministic validation and lifecycle rules.
+Forge has no hidden extractor. The agent that did the work writes the handoff, labels uncertainty, and cites local evidence. Forge keeps observation, hypothesis, counterexample, validation, and developer review separate.
 
-## Structured reflection prompt
+## Good handoff prompt
 
 ```text
-Retrieve relevant active rules and similar past failures.
-Report: goal/scope; observed failure with evidence; prior approach; root cause;
-options rejected; chosen fix and why; verification command/result; unresolved risk;
-and a proposed rule in condition → required action → exception form.
+Read relevant persisted Forge context first. Report goal and bounded scope;
+observed facts with citations; prior approach; why it failed; alternatives;
+chosen fix and rationale; validation result; risk; unresolved work. Propose a
+rule only as a narrow condition → action → exception. Label unknowns. Never
+send the raw conversation, tokens, raw output, or payloads.
 ```
 
-The prompt is research-oriented: retrieve local context first, distinguish observation from inference, cite proof, and label unknown facts instead of inventing them.
+## Verification
 
-## Rule evolution
-
-| Signal | Effect |
+| Later signal | Forge behavior |
 |---|---|
-| One cited failure/fix | Observation or candidate only. |
-| Repeated independently cited category | Candidate may become eligible for activation. |
-| Passing verification after applying a rule | Supporting evidence, not permanent proof. |
-| Revert, failing test, or contradicted review | Mark rule contradicted and require rollback/review. |
-| No relevant later evidence | `insufficient_data`; no confidence increase. |
+| Applicable trusted configured validation supports a rule | Mark card verified. |
+| Applicable trusted configured validation contradicts active rule | Retract rule and roll back managed block. |
+| Git change, GitHub review, or local failure | Save cited input; require developer confirmation before applying it. |
+| No relevant evidence | Remain neutral (`insufficient_data`). |
 
-Autonomous mode uses this same evidence gate; it does not trust a model's confidence score by itself.
+## Feedback and reusable rules
+
+Forge records explicit feedback about context usefulness, missing/irrelevant context, and rule assessment as visible cited review data—not model training. A reusable rule remains local and pending until two distinct repositories have evidence-gated active versions; a developer must approve it, and each project can ignore or replace it locally.

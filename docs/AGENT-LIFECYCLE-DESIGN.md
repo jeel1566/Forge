@@ -1,67 +1,32 @@
-# Global agent installation and Forge lifecycle
+# Agent lifecycle and local runtime
 
-## Decision
+Forge installs per agent, not per repository. `forge install codex` updates only Codex-owned configuration; `forge install antigravity` updates only Antigravity-owned configuration. Each repository keeps a separate `.forge/forge.sqlite3` database.
 
-Forge is installed once for an individual coding agent, not once for Forge itself and not for every other agent. Installing into Codex changes only Codex's global Forge setup. Installing into Antigravity changes only Antigravity's global Forge setup.
+## Start
 
-The installation makes Forge available in every project that agent opens. Each project retains separate local Forge data in its own `.forge` directory.
+1. An installed agent opens a repository.
+2. Its Forge-managed instruction runs `forge session-start --path . --agent <agent>`.
+3. Forge creates/reuses a repository runtime lease and returns `session_id`.
+4. The agent calls `forge_get_session_start_context` before meaningful changes.
 
-## Intended everyday flow
+MCP talks directly to SQLite. A dashboard server is not required for this flow.
 
-### Agent start
+## End
 
-1. A developer opens a project with Codex or Antigravity.
-2. That agent's installed Forge instruction runs first.
-3. It finds the project root and runs `forge session-start --path <project-root>`.
-4. The command creates or refreshes a unique local `session_id` lease for that agent task. MCP accesses the repository SQLite database directly, so agent work never depends on a browser process.
-5. The agent reads active rules, recent outcomes, decisions, and unresolved risks before changing code.
+When the developer types `/forge_end`, the agent's installed Forge End skill reviews only its own work, runs configured validations, writes one bounded cited Session Handoff, calls `forge_complete_session` with the exact session ID, presents persisted alerts, then releases the same lease.
 
-The launcher must use a project lock and health check. It must not use a raw `forge start --path .` instruction because that command blocks the agent and could create duplicate servers.
+If completion cannot be saved, the lease remains active unless the developer explicitly abandons it with one fixed safe reason.
 
-### Agent end
+## Multi-agent runtime
 
-1. The developer invokes `/forge_end`, supplied by the selected agent's globally installed Forge End skill.
-2. The same agent reviews its own work and current conversation context.
-3. It produces a clean, bounded handover: goal, problem, prior approach, why it failed, chosen fix, rationale, alternatives, validation, risks, unresolved work, scope, and an optional proposed rule.
-4. The agent records real local proof of the validation before submitting the handover.
-5. The skill calls `forge_complete_session`; Forge verifies the submitted evidence references, saves the handover as searchable shared context, evaluates any proposed rule, and marks the lease complete.
-6. The skill heartbeats that exact session around longer work. Only then does it release the matching local Forge session lease. Normal release is rejected without that completion marker.
-7. Forge shuts down only after the final active session for that project ends. A bounded stale-session timeout handles an agent crash without leaving Forge alive forever.
+Codex and Antigravity can hold separate leases for the same repository. Forge reuses one local runtime and stops it only after the last lease ends. Stale crashed leases and startup locks are pruned safely. Runtime metadata includes an instance ID so Forge does not stop an unrelated process.
 
-Forge never reads or stores raw chat transcripts. The agent creates the handover from its own available context and submits only the clean structured result.
+## Dashboard ownership
 
-## Runtime model
+- Codex asks its persistent MCP process to start the dashboard when wanted.
+- Antigravity can own a repository sidecar created by `forge install antigravity --path .`.
+- A one-shot agent shell command never owns the dashboard process.
 
-Each project has an independent local Forge database. Multiple Codex and Antigravity tasks have separate session-ID leases while safely sharing that database. The dashboard is optional: an Antigravity project sidecar owns a repository's loopback dashboard process and restart behavior; it is not a child of an agent shell command.
+## Safety
 
-Install that sidecar with `forge install antigravity --path .`, then restart Antigravity so it discovers it. The sidecar receives a dedicated port generated during installation. Codex calls `forge_start_dashboard` through its persistent Forge MCP process after starting a lease; that MCP process owns the loopback dashboard until the final Forge lease ends. The MCP server and database remain local-only.
-
-## Safety requirements
-
-- Never overwrite an agent's existing instructions. Installation updates only that agent's clearly marked Forge-managed block.
-- Never alter the other agent's configuration during a single-agent installation.
-- Never launch two Forge processes for the same project.
-- Never stop Forge while another active Codex or Antigravity session has a lease.
-- Never expose a dashboard beyond loopback or store secrets/raw chats in runtime metadata.
-- If Forge cannot start, the agent continues normally and reports that shared context is unavailable.
-
-## Current state versus target
-
-| Capability | Current state | Target state |
-|---|---|---|
-| Shared local database | Working | Keep |
-| MCP context and outcome submission | Working when configured | Invoke automatically at agent start/end |
-| Project dashboard at `127.0.0.1:8000` | Manual foreground command | Started safely by an agent session when needed |
-| Codex/Antigravity installation | Manual MCP configuration | Agent-specific global installer and managed instructions |
-| Detailed end handover | Agent can submit one | `/forge_end` guides and verifies it |
-| Test/build proof | Outcome text and existing evidence citations | Persisted, sanitized validation-result evidence |
-| Multi-agent process ownership | Working | Project lock, local health checks, one lease per installed agent, last-user shutdown, stale cleanup |
-
-## Non-goals
-
-- A permanent cloud service or 24/7 daemon.
-- Reading an agent's transcript database or sending chat content to Forge.
-- Automatically merging code, resolving conflicts, or changing GitHub data.
-# Foundation consolidation note
-
-Forge now uses one canonical **Session Handoff** record for new agent work. Legacy session-context and AGENTS guardrail records are retained as read-only history only. A rule-supporting handoff must cite applicable configured validation runs; arbitrary command results remain manual context and cannot advance a Learning Card. If Forge detects a manual edit inside its managed `AGENTS.md` block, it blocks projection and records a repair alert instead of overwriting developer content.
+Installer updates are atomic and limited to Forge-managed markers. Forge will not overwrite incomplete markers, a non-Forge skill, another agent's configuration, or manual edits inside its managed rule block.

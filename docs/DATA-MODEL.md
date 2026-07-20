@@ -1,34 +1,59 @@
-# Data model
+# Data model and retention
 
-## Current store
+Forge uses forward-only SQLite migrations. Existing legacy rows are preserved for read-only history; new learning writes use the canonical records below.
 
-The existing local SQLite store contains repositories, immutable evidence/spans, decisions/citations, session handoffs/citations, work sessions, coordination state, GitHub polling state/events, reflections, intentions, and guardrail handoffs. It is migrated forward-only.
+## Storage locations
 
-## Canonical learning records
+| Location | Content |
+|---|---|
+| `<repository>/.forge/forge.sqlite3` | Project repository, evidence, handoffs, validations, cards, rules, polling, work items, feedback, and projection history. |
+| `~/.forge/reusable-rules.sqlite3` | Local cross-project reusable-rule registry; configurable with `FORGE_REUSABLE_RULES_DB`. |
+| `<repository>/.forge/vault/` | Generated project context export only; edits do not create memory. |
+
+## Canonical records
 
 ```text
-workspaces
-workspace_rule_policies
-session_outcomes (public name: Session Handoff) -> evidence_spans
-validation_runs -> evidence_spans
-learning_cards -> session_outcomes + validation_runs
-rule_versions -> learning_cards
-rule_verifications -> rule_versions + validation_runs
-rule_projections -> rule_versions
+repositories
+  └─ evidence_items ─ evidence_spans
+       ├─ session_outcomes (Session Handoffs) ─ session_outcome_citations
+       ├─ validation_runs
+       └─ decisions ─ decision_citations
+
+learning_cards ─ learning_card_observations
+  └─ rule_versions ─ rule_version_citations ─ rule_verifications
+       ├─ verification_inputs
+       └─ rule_projections / projection_alerts
 ```
 
-| Entity | Purpose | Constraint |
+| Record | Meaning | Key safeguard |
 |---|---|---|
-| `workspace_rule_policies` | One persisted `approval` or `autonomous` choice per workspace. | Exactly one active policy and auditable change history. |
-| `session_outcomes` | Canonical agent-authored Session Handoff. | Bounded structured fields; never raw transcript. |
-| `validation_runs` | Safe result of a configured or manual validation. | Only trusted configured runs can support cards. |
-| `learning_cards` | Canonical observed problem and lifecycle. | Identity is normalized scope, area, trigger, and action. |
-| `decision_records` | Why a change was made, changed, removed, or fixed. | Cites source outcome and evidence. |
-| `rule_versions` | Immutable scoped rule text and projection history. | Linked to one Learning Card; cards own lifecycle. |
-| `rule_evaluations` | Deterministic activation checks. | Stores threshold inputs and reason. |
-| `rule_verifications` | Later support, contradiction, or insufficient data. | Cites later evidence; silence is not stored as support. |
-| `rule_projections` | Hash-bound managed `AGENTS.md` projection history. | Records generated/applied content hash and rollback predecessor. |
+| `session_outcomes` | Canonical Session Handoff. | Structured, bounded, idempotent by workspace/outcome key; never a transcript. |
+| `validation_runs` | Sanitized manual or configured validation result. | Trusted only when it comes from current `forge.validation.json`; no output stored. |
+| `learning_cards` | Normalized observed issue: scope, area, trigger, action. | Exact match reuses card; duplicate/conflict alerts block activation. |
+| `rule_versions` | Immutable scoped rule statement and version history. | A card owns lifecycle; a rule is projection history. |
+| `rule_projections` | Journal of managed `AGENTS.md` updates. | Prepared/applied/failed/reverted state plus managed-block hashes. |
+| `verification_inputs` | Later Git, GitHub review, local failure, or validation finding. | Non-validation inputs require explicit developer confirmation. |
+| `work_items` / incidents / cases | Detailed, cited work and repeated observation history. | Facts, hypotheses, counterexamples, and outcomes remain separate. |
+| `reusable_rules` | Local registry of cross-project rules. | Requires evidence-gated active rules from two repositories plus approval. |
 
-## Privacy and retention
+## Learning states
 
-Legacy `session_contexts`, old guardrail records, and existing candidate rules remain read-only history. No table stores GitHub tokens in telemetry, authorization headers, raw sensitive response bodies, command output, or raw chat transcripts. Referenced validation evidence is retained; only unreferenced validation runs older than 90 days are cleaned up.
+Learning Cards use `observed`, `watching`, `ready`, `active`, `verified`, `contradicted`, `retracted`, and `archived`.
+
+- First trusted observation: `observed` or `watching`.
+- Two independent applicable trusted observations: `ready`.
+- Ready card: `active` only through autonomous evidence gate or approval-mode developer approval.
+- Later support: `verified`.
+- Confirmed contradiction: `contradicted`, then `retracted` if the linked active rule is rolled back.
+- `archived` remains historical and cannot accept new learning.
+
+Rule versions separately retain historical candidate/active/retracted statements. Legacy older records remain exposed only through `forge_get_legacy_history`.
+
+## Privacy and cleanup
+
+- Forge does not persist chat transcripts, GitHub tokens in telemetry, authorization headers, raw response bodies, or raw validation output.
+- A GitHub token is stored only in the local protected connector-secret store and is never returned by API/MCP/export.
+- Referenced validation evidence is retained with its handoff/card/rule links.
+- Only unreferenced local validation evidence older than 90 days is eligible for cleanup.
+- GitHub sync events retain at most 30 days and 500 newest events.
+- SQLite migrations are additive and forward-only; never edit an applied migration or delete project data during normal upgrade.

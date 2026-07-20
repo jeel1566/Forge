@@ -1,23 +1,36 @@
-# Local setup
+# Contributor setup
 
-## Run the current build
+## Run Forge from source
 
 ```powershell
-pip install -e .
-pnpm --dir frontend build
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e .
+pnpm install --frozen-lockfile
+pnpm --dir frontend run build
 forge start --path .
 ```
 
-Open `http://127.0.0.1:8000`. Data stays in `.forge/forge.sqlite3` in the selected repository. Use `forge backup`, `forge export`, and `forge doctor` for local maintenance.
+Open `http://127.0.0.1:8000`. The selected repository stores data in `.forge/forge.sqlite3`.
 
-## Connect agents
+## Validate changes
 
-Use the commands in [agent setup](AGENT-SETUP.md) to point Codex and Antigravity at the same SQLite file. Both agents retrieve local context and submit their own summary through MCP; Forge does not connect to their transcript stores.
+```powershell
+python -m unittest discover -s backend/tests -v
+pnpm --dir frontend run build
+git diff --check
+```
 
-## Optional GitHub polling
+Use `forge.validation.json` for trusted local validation runs. Do not commit `.forge/`, build artifacts, tokens, generated vault content, or unrelated user files.
 
-Configure a fine-grained read-only token in the dashboard only if PR/review evidence is needed. Polling is disabled by default, remains local, and does not affect normal Git/MCP use when unavailable.
+## Package check
 
-## New Forge status
+Install `build`, `twine`, and `pipx`, then use `pyproject-build` rather than `python -m build` because this repository has a `build/` directory.
 
-The policy selection and autonomous rule-evolution loop are specified but not fully delivered in the current build. Follow [the implementation plan](IMPLEMENTATION-PLAN.md) before enabling or documenting target-only MCP tools in a production agent configuration.
+```powershell
+python -m pip install --upgrade build twine pipx
+pyproject-build
+python -m twine check dist/*
+```
+
+See [Releasing Forge](RELEASING.md) for the isolated `pipx` lifecycle and Trusted Publishing flow.

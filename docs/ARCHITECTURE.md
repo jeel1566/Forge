@@ -2,84 +2,80 @@
 
 ## Purpose
 
-Forge is a local, shared memory for coding agents. Codex and Antigravity do their own reasoning and summarise their own sessions. Forge stores that compact summary alongside local evidence, returns relevant context to the next agent, and maintains scoped rules for the repository.
+Forge is a local evidence and memory layer used by coding agents. Agents do the reasoning; Forge persists only the compact facts they explicitly submit and connects those facts to local proof.
 
-Forge never reads an agent's transcript. MCP is the explicit bridge: an agent chooses what structured facts to send and Forge returns only persisted local metadata.
+Every repository keeps a project database at `.forge/forge.sqlite3`. Reusable rules live in a separate local registry at `~/.forge/reusable-rules.sqlite3` unless `FORGE_REUSABLE_RULES_DB` overrides it.
 
-## Whole-system diagram
+## Components
 
 ```mermaid
 flowchart TB
-  subgraph Agents[Agent sessions]
-    C[Codex]
-    A[Antigravity]
-    C --> S[Structured self-summary]
-    A --> S
+  subgraph Agent sessions
+    Codex[Codex]
+    Antigravity[Antigravity]
   end
-
-  subgraph Forge[Forge on the developer machine]
-    MCP[Local MCP server: stdio + read-only HTTP]
-    API[Loopback API + dashboard]
-  DB[(SQLite: handoffs, validations, cards, rules, events)]
-    Rules[Managed rule projection in AGENTS.md]
-    MCP <--> DB
-    API <--> DB
-    DB --> Rules
+  subgraph Developer machine
+    CLI[forge CLI]
+    MCP[stdio MCP]
+    HTTP[read-only HTTP MCP]
+    API[Loopback API and dashboard]
+    DB[(Project SQLite)]
+    Registry[(Reusable-rule SQLite)]
+    Rules[Forge-managed AGENTS.md block]
   end
-
-  subgraph Evidence[Evidence sources]
-    Git[Local Git commits and changed paths]
-    Checks[Tests, builds, lint, runtime errors]
-    GH[Optional GitHub PRs, reviews, review comments]
+  subgraph Evidence
+    Git[Local Git]
+    Validation[Configured validations]
+    GitHub[Optional GitHub reader]
   end
-
-  C -->|retrieve context / submit summary| MCP
-  A -->|retrieve context / submit summary| MCP
+  Codex <--> MCP
+  Antigravity <--> MCP
+  CLI --> DB
+  MCP <--> DB
+  HTTP <--> DB
+  API <--> DB
   Git --> DB
-  Checks --> DB
-  GH --> DB
-  Rules --> C
-  Rules --> A
+  Validation --> DB
+  GitHub --> DB
+  DB <--> Registry
+  DB --> Rules
 ```
 
-## The seven stages
+## Data flow
+
+1. `forge session-start` resolves the repository root, initializes or reuses project SQLite, registers a lease, and returns a session ID.
+2. The agent reads `forge_get_session_start_context`; Forge returns persisted facts only.
+3. The agent may create work items, cited handoffs, decisions, validation evidence, and verification inputs through the local stdio MCP server.
+4. Forge normalizes a proposed rule's scope, area, trigger, and action into a Learning Card. Exact identity reuses the card; close identities generate duplicate/conflict alerts.
+5. Two independent handoffs with applicable trusted configured validations make a card `ready`. Pending duplicate/conflict alerts block activation.
+6. Approval mode requires the developer to approve the exact managed-block diff. Autonomous mode can activate only a ready, unflagged card. Both use a durable projection journal and atomic file replacement.
+7. Later support verifies a card. A confirmed contradiction retracts its active rule and regenerates the managed block without it.
+
+## Lifecycle
 
 ```mermaid
-flowchart LR
-  I[1. Collect] --> E[2. Cite evidence]
-  E --> D[3. Record decision]
-  D --> L[4. Evaluate learning]
-  L --> V[5. Verify later work]
-  V --> P[6. Detect repetition]
-  P --> R[7. Publish or roll back scoped rule]
-  R --> I
+stateDiagram-v2
+  [*] --> observed
+  observed --> watching
+  watching --> ready
+  ready --> active
+  active --> verified
+  active --> contradicted
+  contradicted --> retracted
+  observed --> archived
+  watching --> archived
+  ready --> archived
 ```
 
-1. **Collect** — an agent submits its own summary; Git, tests, errors, and optional GitHub data provide local facts.
-2. **Cite evidence** — Forge links the summary to exact commits, changed paths, test results, or review records.
-3. **Record handoff** — Forge records what changed, why it was chosen, alternatives removed, failure of the old approach, and validation.
-4. **Evaluate learning** — a Learning Card is checked for structured identity, configured validation coverage, duplication, and policy mode.
-5. **Verify later work** — later results support, contradict, or leave the rule unverified; silence proves nothing.
-6. **Detect repetition** — repeated, separately cited failures can strengthen a candidate rule.
-7. **Publish or roll back** — approval mode waits for confirmation; autonomous mode may project a safe rule and records a reversible version.
+`review_due_at` is 90 days after activation. An overdue active rule stays active; Forge emits a review alert rather than removing it automatically.
 
-## Policy boundary
+## Runtime ownership
 
-On first workspace initialization, Forge asks once whether rules run in `approval` or `autonomous` mode. The selection is persisted per workspace.
+- **Codex:** its persistent Forge MCP process owns any dashboard started by `forge_start_dashboard`.
+- **Antigravity:** an optional repository sidecar owns the dashboard process and can restart it on failure.
+- **Sessions:** one project may have Codex and Antigravity leases at the same time. Forge stops managed runtime only after the final lease ends and cleans stale crashed leases safely.
+- **ChatGPT:** `forge mcp-http` is a separate loopback-only, read-only server. A separately installed OpenAI tunnel client is optional and never required for Codex or Antigravity.
 
-| Mode | Rule transition | Required safeguard |
-|---|---|---|
-| Approval | Ready Learning Card → developer approval → active | Exact rule diff and cited configured validation evidence are shown. |
-| Autonomous | Ready Learning Card → active | Scope, provenance, version, review date, and rollback journal are mandatory. |
+## Failure boundaries
 
-Both modes prohibit raw transcript capture, secrets in memory, auto-merges, conflict resolution, GitHub writes, and rules without evidence.
-
-## Current implementation versus target
-
-Forge provides local Git/GitHub evidence, SQLite persistence, work-session boundaries, cited Session Handoffs, configured local validation, Learning Cards, and managed-rule rollback. Legacy session-context and guardrail paths are retained as read-only history only; new agents use the focused Session Handoff and Learning Card MCP tools.
-
-## Runtime and failure behavior
-
-The API binds to `127.0.0.1`; the agent MCP process uses local stdio and opens the same SQLite database. `forge mcp-http` provides a separate loopback-only Streamable HTTP MCP endpoint containing only safe read tools for ChatGPT's Secure MCP Tunnel flow. OpenAI's external `tunnel-client` forwards that endpoint through an outbound tunnel; it is not part of normal Codex or Antigravity use. Optional GitHub polling runs only while Forge runs, is disabled by default, and never blocks local features. Safe telemetry records request/status/rate-limit/retry information but never tokens, headers, or raw response bodies.
-
-If Forge is offline, agents continue normally and state that shared context is unavailable. If GitHub is offline or rate limited, local Git evidence, MCP, and the dashboard remain usable.
+The local product remains usable if GitHub, the network, the dashboard, or the optional tunnel is unavailable. GitHub sync records safe status and retry telemetry; it never blocks local memory operations. Forge never overwrites a manually edited managed rule block: it creates a projection-repair alert instead.

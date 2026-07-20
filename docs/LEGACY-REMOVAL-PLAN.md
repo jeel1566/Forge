@@ -1,4 +1,6 @@
-# Legacy removal plan
+# Historical legacy-removal record
+
+> This page records the migration approach. New work uses Session Handoffs, Learning Cards, validation runs, rule versions, verification inputs, and projection history; legacy data is read-only.
 
 Forge has one canonical learning path: Session Handoffs, evidence spans, configured validation runs, Learning Cards, rule versions, verification inputs, and managed-rule projections. Earlier session-context and guardrail features remain in the database only as historical records. This plan removes superseded behavior without deleting local history or editing old SQLite migrations.
 
