@@ -69,6 +69,27 @@ If Codex is configured to use GPT-5.6, GPT-5.6 is the reasoning agent: it reads 
 
 This repository cannot prove or measure prior GPT-5.6 chat performance because Forge deliberately does not store raw chats. See [Model runtime boundaries](docs/MODEL-RUNTIME.md).
 
+### How Codex helped build Forge
+
+This is a development-provenance summary from the visible project work and Git history, not a Forge chat export. Codex was used as the coding collaborator to audit the repository, turn the Forge idea into implementation slices, change the Python/SQLite/MCP code, build the agent install and session lifecycle, harden GitHub polling, repair dashboard/runtime issues, add the learning and vault flows, run tests/builds, prepare the `pipx` package, and keep the documentation aligned with the shipped code.
+
+Codex did not become a hidden Forge service. During future use, Codex (and GPT-5.6 when selected by Codex) remains the agent that reasons about a task and writes a clean handoff; Forge remains the local memory, evidence gate, and rule lifecycle system.
+
+## Release status
+
+- **GitHub source:** published on `main`.
+- **Package metadata:** prepared as `forge-local-memory`, version `0.1.0`.
+- **PyPI release:** **not published yet**.
+- **Git release tag:** **not created yet**.
+
+Until the first tagged PyPI release, install the current source with:
+
+```powershell
+pipx install "git+https://github.com/jeel1566/Forge.git@main"
+```
+
+To publish, configure the PyPI Trusted Publisher, create the protected GitHub `pypi` environment, then push the matching `v0.1.0` tag. The release workflow will build, validate, and publish without storing a PyPI token. See [Releasing Forge](docs/RELEASING.md).
+
 ## Safety rules
 
 1. Never store raw chat transcripts, tokens, authorization headers, raw command output, or raw GitHub response bodies.
