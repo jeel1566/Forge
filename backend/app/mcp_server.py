@@ -187,22 +187,31 @@ def forge_record_session_handoff(agent: str, worktree_path: str, branch: str, ou
 
 
 @mcp.tool()
-def forge_complete_session(session_id: str, handoff: dict, workspace_id: str = "default") -> dict:
-    """Save one cited transcript-free Session Handoff and mark its lease ready for `forge session-end`.
+def forge_complete_session(session_id: str, handoff: dict | None = None, handoffs: list[dict] | None = None, workspace_id: str = "default") -> dict:
+    """Save one or more cited transcript-free Session Handoffs, then mark the lease ready for `forge session-end`.
 
-    `handoff` requires: agent, worktree_path, branch, outcome_key, scope, category, goal,
-    problem, prior_approach, why_prior_approach_failed, alternatives, chosen_fix, rationale,
-    validation, risk, unresolved, proposed_rule, and evidence_span_ids. Use `unresolved`, not
-    `unresolved_work`; the latter is accepted only as a compatibility alias. Set
-    `proposed_rule` to `none` when no rule is proposed.
+    Prefer `handoffs` for every distinct completed work unit from one agent session. `handoff`
+    remains supported for existing agent setups. Each handoff requires: agent, worktree_path,
+    branch, outcome_key, scope, category, goal, problem, prior_approach,
+    why_prior_approach_failed, alternatives, chosen_fix, rationale, validation, risk,
+    unresolved, proposed_rule, and evidence_span_ids.
     """
-    handoff = _normalized_completion_handoff(handoff)
-    agent = handoff["agent"]
+    if handoff is not None and handoffs is not None:
+        raise ValueError("Provide handoff or handoffs, not both.")
+    raw_handoffs = handoffs if handoffs is not None else [handoff]
+    if not isinstance(raw_handoffs, list) or not raw_handoffs:
+        raise ValueError("At least one handoff is required.")
+    normalized = [_normalized_completion_handoff(item) for item in raw_handoffs]
+    agents = {item["agent"] for item in normalized}
+    if len(agents) != 1:
+        raise ValueError("All handoffs in one completed session must use the same agent.")
+    agent = normalized[0]["agent"]
 
     def complete(store: Store) -> dict:
-        result = _record_handoff(store, workspace_id, handoff)
-        completion = _runtime_for(store).mark_handoff(session_id, agent, result["outcome"]["id"])
-        return {**result, "completion": completion, "learning_alerts": store.learning_alerts(workspace_id)}
+        results = [_record_handoff(store, workspace_id, item) for item in normalized]
+        completion = _runtime_for(store).mark_handoff(session_id, agent, results[-1]["outcome"]["id"])
+        response = {"outcomes": [result["outcome"] for result in results], "results": results, "completion": completion, "learning_alerts": store.learning_alerts(workspace_id)}
+        return {**results[0], **response} if len(results) == 1 else response
 
     return with_store(complete)
 

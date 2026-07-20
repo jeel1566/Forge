@@ -22,7 +22,7 @@ When asked about previous work, call `forge_get_latest_session_handoff` and answ
 
 1. Run `forge_run_configured_validation` for each applicable checked-in validation ID, then call `forge_get_recent_evidence`.
 2. Write a concise self-summary: goal, problem, prior approach, why it failed, alternatives, fix, validation, risk, and unresolved work.
-3. Submit it with `forge_complete_session` and the retained session ID. A proposed rule requires structured `scope`, `learning_area`, `learning_trigger`, and `learning_action`.
+3. Split distinct completed work units into multiple handoffs, then submit them together as `handoffs` with `forge_complete_session` and the retained session ID. A proposed rule requires structured `scope`, `learning_area`, `learning_trigger`, and `learning_action`.
 4. Report persisted alerts, then run `forge session-end --path . --session-id <session_id>`.
 5. Use `forge_record_decision` only for a reusable non-rule decision.
 

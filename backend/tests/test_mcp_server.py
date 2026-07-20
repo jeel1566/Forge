@@ -169,6 +169,26 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual("complete-session", result["outcome"]["outcome_key"])
         runtime.mark_handoff.assert_called_once_with("session-1", "codex", result["outcome"]["id"])
 
+    def test_complete_session_saves_every_handoff_before_marking_the_lease(self):
+        store = Store(self.database)
+        store.register_repository("default", ".")
+        span_id = store.create_evidence("default", "git_commit", "Validation", "safe", "Validation passed", "batch-commit")
+        store.close()
+        handoff = {
+            "agent": "codex", "worktree_path": ".", "branch": "main", "scope": ["repository"], "category": "testing",
+            "problem": "One handoff hid separate work.", "prior_approach": "Recorded a single session result.",
+            "why_prior_approach_failed": "Distinct changes need their own context.", "alternatives": [],
+            "chosen_fix": "Record a batch.", "rationale": "Each work unit remains legible.",
+            "validation": "Configured validation passed", "risk": "A failed item keeps the lease open.", "unresolved": "none",
+            "proposed_rule": "none", "evidence_span_ids": [span_id],
+        }
+        runtime = MagicMock()
+        runtime.mark_handoff.return_value = {"handoff_id": "recorded", "lease_ready_to_end": True}
+        with patch.dict(os.environ, {"FORGE_DB_PATH": str(self.database)}), patch("backend.app.mcp_server.ForgeRuntime", return_value=runtime):
+            result = mcp_server.forge_complete_session("session-1", handoffs=[{**handoff, "outcome_key": "batch-one", "goal": "First work unit"}, {**handoff, "outcome_key": "batch-two", "goal": "Second work unit"}])
+        self.assertEqual(["batch-one", "batch-two"], [outcome["outcome_key"] for outcome in result["outcomes"]])
+        runtime.mark_handoff.assert_called_once_with("session-1", "codex", result["outcomes"][-1]["id"])
+
 
 if __name__ == "__main__":
     unittest.main()
