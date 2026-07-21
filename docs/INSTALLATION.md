@@ -17,8 +17,6 @@ The public package name is `forge-local-memory`; its command is `forge`.
 # Before the first PyPI publication
 pipx install "git+https://github.com/jeel1566/Forge.git@main"
 
-# After the PyPI release is published
-# pipx install forge-local-memory
 
 forge --help
 ```
@@ -33,7 +31,7 @@ Choose the agent you use. Each command changes only that agent's Forge-owned MCP
 forge install codex
 
 # Run inside a repository when Antigravity should also own a dashboard sidecar.
-forge install antigravity --path .
+forge session-start --path . --agent antigravity
 ```
 
 Restart the chosen agent once so it discovers the MCP server. Check setup without changing data:
